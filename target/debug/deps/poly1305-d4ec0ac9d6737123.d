@@ -1,0 +1,10 @@
+/home/f5adff/dev/practice/backend/low/rust/passman/target/debug/deps/libpoly1305-d4ec0ac9d6737123.rmeta: /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/poly1305-0.7.2/src/lib.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/poly1305-0.7.2/src/backend.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/poly1305-0.7.2/src/backend/avx2.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/poly1305-0.7.2/src/backend/avx2/helpers.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/poly1305-0.7.2/src/backend/autodetect.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/poly1305-0.7.2/src/backend/soft.rs
+
+/home/f5adff/dev/practice/backend/low/rust/passman/target/debug/deps/poly1305-d4ec0ac9d6737123.d: /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/poly1305-0.7.2/src/lib.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/poly1305-0.7.2/src/backend.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/poly1305-0.7.2/src/backend/avx2.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/poly1305-0.7.2/src/backend/avx2/helpers.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/poly1305-0.7.2/src/backend/autodetect.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/poly1305-0.7.2/src/backend/soft.rs
+
+/home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/poly1305-0.7.2/src/lib.rs:
+/home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/poly1305-0.7.2/src/backend.rs:
+/home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/poly1305-0.7.2/src/backend/avx2.rs:
+/home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/poly1305-0.7.2/src/backend/avx2/helpers.rs:
+/home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/poly1305-0.7.2/src/backend/autodetect.rs:
+/home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/poly1305-0.7.2/src/backend/soft.rs:

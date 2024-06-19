@@ -1,0 +1,12 @@
+/home/f5adff/dev/practice/backend/low/rust/passman/target/debug/deps/libargon2-a9692e13366951c7.rmeta: /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/lib.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/algorithm.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/blake2b_long.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/block.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/error.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/params.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/version.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/../README.md
+
+/home/f5adff/dev/practice/backend/low/rust/passman/target/debug/deps/argon2-a9692e13366951c7.d: /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/lib.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/algorithm.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/blake2b_long.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/block.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/error.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/params.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/version.rs /home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/../README.md
+
+/home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/lib.rs:
+/home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/algorithm.rs:
+/home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/blake2b_long.rs:
+/home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/block.rs:
+/home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/error.rs:
+/home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/params.rs:
+/home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/version.rs:
+/home/f5adff/.cargo/registry/src/index.crates.io-6f17d22bba15001f/argon2-0.5.3/src/../README.md:
