@@ -3,7 +3,6 @@ use rand::{rngs::OsRng, RngCore};
 use std::{fs, process::exit};
 mod cryptman;
 
-//TODO: seperate main and cryptman into separate files
 fn main() {
     // obligatory garbage password
     let pass = "password";
