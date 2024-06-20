@@ -6,11 +6,20 @@ use chacha20poly1305::{
 };
 use log::{debug, info};
 use rand::{rngs::OsRng, RngCore};
+use hex_literal::hex;
+use sha3::{Digest, Sha3_256};
 use std::{
     fs,
     io::{prelude::*, BufReader, Write},
     str,
 };
+
+pub fn hash_str(input: &str,key:[u8;32])-> String{
+    let mut hasher = Sha3_256::new();
+    hasher.update(input);
+    let result = hasher.finalize();
+    hex::encode(result).to_owned()
+}
 
 /**
 expects clear text passphrase as str, and the salt for the key as [u8;32]. provide an empty array for salt to generate a new one.
