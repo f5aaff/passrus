@@ -6,7 +6,6 @@ use chacha20poly1305::{
 };
 use log::{debug, info};
 use rand::{rngs::OsRng, RngCore};
-use hex_literal::hex;
 use sha3::{Digest, Sha3_256};
 use std::{
     fs,
@@ -14,17 +13,15 @@ use std::{
     str,
 };
 
-pub fn hash_str(input: &str,key:[u8;32])-> String{
+/// takes a str, hashes it using sha3_256, returns a string of the hash.
+pub fn hash_str(input: &str)-> String{
     let mut hasher = Sha3_256::new();
     hasher.update(input);
     let result = hasher.finalize();
     hex::encode(result).to_owned()
 }
 
-/**
-expects clear text passphrase as str, and the salt for the key as [u8;32]. provide an empty array for salt to generate a new one.
-
-**/
+///expects clear text passphrase as str, and the salt for the key as [u8;32]. provide an empty array for salt to generate a new one.
 pub fn pass_2_key(input: &str, mut salt: [u8; 32]) -> Result<([u8; 32], [u8; 32]), argon2::Error> {
     info!(target:"pass_2_key", "attempting to generate key...");
     if salt.is_empty() {
@@ -38,10 +35,7 @@ pub fn pass_2_key(input: &str, mut salt: [u8; 32]) -> Result<([u8; 32], [u8; 32]
     Ok((res, salt))
 }
 
-/**
-encrypts data by loading it into memory wholly first. takes path,dest,key,nonce,and salt.
-encrypted using XChaCha20Poly1305.
-**/
+/// encrypts data by loading it into memory wholly first. takes data as a Vec<u8> ,dest,key,nonce,and salt. encrypted using XChaCha20Poly1305.
 pub fn encrypt_file_mem_with_salt(
     file_data: Vec<u8>,
     dist: &str,
@@ -87,19 +81,16 @@ where
     buf
 }
 
-/**
-decrypt_file_mem_gen_key expects a path to the encrypted file,
-the destination for the decrypted content,
-and the password to decrypt it with.
-
-the file is read in, then the salt and nonce are parsed
-from the end of the file content.
-
-these are used to then decrypt the remaining file content.
-
-the file is loaded into memory, not streamed.
-
- **/
+/// decrypt_file_mem_gen_key expects a path to the encrypted file,
+/// the destination for the decrypted content,
+/// and the password to decrypt it with.
+///
+/// the file is read in, then the salt and nonce are parsed
+/// from the end of the file content.
+///
+/// these are used to then decrypt the remaining file content.
+///
+/// the file is loaded into memory, not streamed.
 pub fn decrypt_file_mem_gen_key(
     file_data: Vec<u8>,
     dist: &str,
