@@ -2,7 +2,7 @@ use crate::cryptman;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, usize};
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone,Serialize, Deserialize)]
 pub struct Container {
     pub name: String,
     pub children: HashMap<String, Container>,
@@ -101,6 +101,47 @@ impl Entry {
         let binding = cryptman::encrypt_file_mem_with_salt(self.pass_vec.clone(), "", &key, &nonce, &salt)?;
         self.pass_vec = binding;
         Ok(())
+    }
 
+    pub fn decrypt_password(&mut self,password:&str) -> Result<(),anyhow::Error> {
+
+        let binding = cryptman::decrypt_file_mem_gen_key(self.pass_vec.clone(),"", password)?;
+        self.pass_vec = binding;
+        Ok(())
     }
 }
+
+pub fn get_entries_by_field(container: &Container, field_name: &str, target_value: &str) -> Vec<Entry> {
+    let mut result = Vec::new();
+
+    // Check entries in the current container
+    for entry in container.entries.values() {
+        match field_name {
+            "url" => {
+                if entry.url == target_value {
+                    result.push(entry.clone()); // Clone the Entry
+                }
+            }
+            "email" => {
+                if entry.email == target_value {
+                    result.push(entry.clone()); // Clone the Entry
+                }
+            }
+            "parent" => {
+                if entry.parent == target_value {
+                    result.push(entry.clone()); // Clone the Entry
+                }
+            }
+            _ => {} // Handle other fields if needed
+        }
+    }
+
+    // Recursively check subcontainers
+    for child_container in container.children.values() {
+        result.extend(get_entries_by_field(child_container, field_name, target_value));
+    }
+
+    result
+}
+
+
