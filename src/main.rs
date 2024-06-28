@@ -1,51 +1,8 @@
-use log::{info, warn};
+use log:: warn;
 use rand::{rngs::OsRng, RngCore};
-use std::{collections::HashMap, fs, process::exit};
+use std::process::exit;
 mod cryptman;
 mod passman;
-
-//pub fn flatten(
-//    parent: &passman::Container,
-//) -> Result<HashMap<String, passman::Entry>, anyhow::Error> {
-//    let mut entries: HashMap<String, passman::Entry> = HashMap::new();
-//
-//    // if the container has any entries, add them to the flattened map.
-//    if parent.entries.len() > 0 {
-//        println!("parent:{}:{}",parent.name,parent.entries.len());
-//        for (key, value) in &parent.entries {
-//            entries.insert(key.to_owned(), value.clone());
-//            println!("entries len:{}",entries.len());
-//        }
-//    }
-//
-//    // if it has any children, iterate over them and flatten them, adding the entries to the map.
-//    if parent.children.len() > 0 {
-//        for (_key, value) in &parent.children {
-//            flatten(&value)?;
-//        }
-//    }
-//    // if nothing breaks, return the entries.
-//    Ok(entries)
-//}
-
-pub fn flatten(
-    parent: &passman::Container,
-) -> Result<HashMap<String, passman::Entry>, anyhow::Error> {
-    let mut entries: HashMap<String, passman::Entry> = HashMap::new();
-
-    // Add entries from the current container.
-    for (key, value) in &parent.entries {
-        entries.insert(key.to_owned(), value.clone());
-    }
-
-    // Recursively process nested containers.
-    for (_, nested_container) in &parent.children {
-        let nested_entries = flatten(nested_container)?;
-        entries.extend(nested_entries);
-    }
-
-    Ok(entries)
-}
 
 
 
@@ -119,6 +76,7 @@ fn main() {
 
     // adding a new container as a child, then adding entries to it
     sub_container.add_child(passman::Container::new("sub_sub_container"));
+
     sub_container
         .children
         .get_mut("sub_sub_container")
@@ -182,16 +140,6 @@ fn main() {
     let mut passes: passman::Container = passman::Container::new("");
     passes.from_json_arr(dec_res.as_slice()).unwrap();
 
-    let flat = flatten(&passes).unwrap();
-    println!("{}",flat.len());
-
-    for (_, mut val) in flat {
-        //let vec = &val.pass_vec;
-        //let vec = &vec.clone();
-       // let lossy_encrypted = String::from_utf8_lossy(vec.as_slice());
-        val.pass_vec = cryptman::decrypt_file_mem_gen_key(val.pass_vec, "", pass).unwrap();
-    }
-
     let target_field = "url"; // Change to "email" if needed
     let target_value = "test-site.com"; // Change to the desired value
 
@@ -199,13 +147,14 @@ fn main() {
     for mut entry in matching_entries {
         let vec = &entry.pass_vec;
         let vec = &vec.clone();
+
         let lossy_encrypted = String::from_utf8_lossy(vec.as_slice());
         entry.pass_vec = cryptman::decrypt_file_mem_gen_key(entry.pass_vec, "", pass).unwrap();
 
         let password = String::from_utf8_lossy(entry.pass_vec.as_slice());
-        println!("Username: {}\t encrypted:{}\t pass:{}", entry.username,lossy_encrypted,password);
-        // Add other fields as needed
+        println!(
+            "Username: {}\t encrypted:{}\t pass:{}",
+            entry.username, lossy_encrypted, password
+        );
     }
-
-
 }

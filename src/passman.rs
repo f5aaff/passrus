@@ -149,4 +149,21 @@ pub fn get_entries_by_field(container: &Container, field_name: &str, target_valu
     result
 }
 
+pub fn flatten(
+    parent: &Container,
+) -> Result<HashMap<String, Entry>, anyhow::Error> {
+    let mut entries: HashMap<String, Entry> = HashMap::new();
 
+    // Add entries from the current container.
+    for (key, value) in &parent.entries {
+        entries.insert(key.to_owned(), value.clone());
+    }
+
+    // Recursively process nested containers.
+    for (_, nested_container) in &parent.children {
+        let nested_entries = flatten(nested_container)?;
+        entries.extend(nested_entries);
+    }
+
+    Ok(entries)
+}
