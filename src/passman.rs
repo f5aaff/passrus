@@ -132,6 +132,11 @@ pub fn get_entries_by_field(container: &Container, field_name: &str, target_valu
                     result.push(entry.clone()); // Clone the Entry
                 }
             }
+            "username" => {
+                if entry.username == target_value {
+                    result.push(entry.clone());
+                }
+            }
             _ => {} // Handle other fields if needed
         }
     }
