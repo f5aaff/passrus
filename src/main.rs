@@ -37,15 +37,24 @@ struct App {
     input_mode: InputMode,
     /// History of recorded messages
     messages: Vec<String>,
+
+    key: [u8; 32],
+    salt: [u8; 32],
+
+    parent_container: passman::Container,
 }
 
 impl App {
-    const fn new() -> Self {
+    pub fn new() -> Self {
+        let c = passman::Container::new("parent");
         Self {
             input: String::new(),
             input_mode: InputMode::Normal,
             messages: Vec::new(),
             character_index: 0,
+            key: [0u8; 32],
+            salt: [0u8; 32],
+            parent_container: c,
         }
     }
 
@@ -108,7 +117,9 @@ impl App {
     }
 
     fn submit_message(&mut self) {
-        let res = cryptman::pass_2_key(self.input.as_str(), [0u8;32]).unwrap();
+        let res = cryptman::pass_2_key(self.input.as_str(), [0u8; 32]).unwrap();
+        self.key = res.0;
+        self.salt = res.1;
         let enc_string = String::from_utf8_lossy(&res.0);
         self.messages.push(enc_string.into_owned());
         self.messages.push(self.input.clone());
@@ -257,8 +268,6 @@ fn ui(f: &mut Frame, app: &App) {
     let messages = List::new(messages).block(Block::bordered().title("Messages"));
     f.render_widget(messages, messages_area);
 }
-
-
 
 fn _test_passrus() {
     // obligatory garbage password
