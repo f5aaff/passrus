@@ -1,11 +1,12 @@
-use cryptman::encrypt_file_mem_with_salt;
-use log::warn;
+use log::{info, warn};
 use rand::{rngs::OsRng, RngCore};
+use ratatui::widgets::{Row, Table};
 use std::process::exit;
 mod cryptman;
 mod passman;
 mod tui;
-
+use std::fs;
+use std::{collections::HashMap, usize};
 use std::{error::Error, io};
 
 use ratatui::{
@@ -18,8 +19,8 @@ use ratatui::{
     layout::{Constraint, Layout},
     style::{Color, Modifier, Style, Stylize},
     terminal::{Frame, Terminal},
-    text::{Line, Span, Text},
-    widgets::{Block, List, ListItem, Paragraph},
+    text::{Line, Text},
+    widgets::{Block, Paragraph},
 };
 
 enum InputMode {
@@ -35,26 +36,26 @@ struct App {
     character_index: usize,
     /// Current input mode
     input_mode: InputMode,
-    /// History of recorded messages
-    messages: Vec<String>,
 
     key: [u8; 32],
     salt: [u8; 32],
 
     parent_container: passman::Container,
+    entries: HashMap<String, passman::Entry>,
 }
 
 impl App {
     pub fn new() -> Self {
-        let c = passman::Container::new("parent");
+        let c = passman::Container::new("");
+        let m: HashMap<String, passman::Entry> = HashMap::new();
         Self {
             input: String::new(),
             input_mode: InputMode::Normal,
-            messages: Vec::new(),
             character_index: 0,
             key: [0u8; 32],
             salt: [0u8; 32],
             parent_container: c,
+            entries: m,
         }
     }
 
@@ -116,15 +117,50 @@ impl App {
         self.character_index = 0;
     }
 
-    fn submit_message(&mut self) {
+    fn accept_password(&mut self) {
+        if self.input != "" {
+            let _crypt_string = match fs::read_to_string("parent.json") {
+                Ok(d) => {
+                    let _res =
+                        match cryptman::decrypt_file_mem_gen_key(d.into(), "", self.input.as_str())
+                        {
+                            Ok(pc) => {
+                                let _string = match String::from_utf8(pc.clone()) {
+                                    Ok(s) => {
+                                        let res = self.parent_container.from_json_string(&s);
+                                        match res {
+                                            Ok(_) => {
+                                                self.load_entries().unwrap();
+                                            }
+                                            Err(_) => {}
+                                        }
+                                    }
+                                    Err(error) => {
+                                        info!("error parsing string: {error:?}");
+                                    }
+                                };
+                            }
+                            Err(err) => {
+                                info!("decryption whoopsie: {err:?}");
+                            }
+                        };
+                }
+                Err(err) => {
+                    info!("reading whoopsie: {err:?}");
+                }
+            };
+        };
         let res = cryptman::pass_2_key(self.input.as_str(), [0u8; 32]).unwrap();
         self.key = res.0;
         self.salt = res.1;
-        let enc_string = String::from_utf8_lossy(&res.0);
-        self.messages.push(enc_string.into_owned());
-        self.messages.push(self.input.clone());
         self.input.clear();
         self.reset_cursor();
+    }
+
+    fn load_entries(&mut self) -> Result<(), anyhow::Error> {
+        let cont = &self.parent_container;
+        self.entries = passman::flatten(&cont)?;
+        Ok(())
     }
 }
 
@@ -172,7 +208,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
                     _ => {}
                 },
                 InputMode::Editing if key.kind == KeyEventKind::Press => match key.code {
-                    KeyCode::Enter => app.submit_message(),
+                    KeyCode::Enter => app.accept_password(),
                     KeyCode::Char(to_insert) => {
                         app.enter_char(to_insert);
                     }
@@ -229,7 +265,23 @@ fn ui(f: &mut Frame, app: &App) {
     let text = Text::from(Line::from(msg)).patch_style(style);
     let help_message = Paragraph::new(text);
     f.render_widget(help_message, help_area);
-
+    let mut rows: Vec<Row> = vec![];
+    let header = Row::new(vec![
+        "url".to_owned(),
+        "email".to_owned(),
+        "username".to_owned(),
+    ]);
+    for (_key, val) in &app.entries {
+        let mut row: Vec<String> = vec![];
+        row.push(val.url.to_owned());
+        row.push(val.email.clone());
+        row.push(val.username.clone());
+        let r = Row::default().cells(row);
+        rows.push(r)
+    }
+    let messages = Table::new(rows, [Constraint::Length(7), Constraint::Length(30)])
+        .block(Block::bordered().title("table"))
+        .header(header);
     let input = Paragraph::new(app.input.as_str())
         .style(match app.input_mode {
             InputMode::Normal => Style::default(),
@@ -237,6 +289,7 @@ fn ui(f: &mut Frame, app: &App) {
         })
         .block(Block::bordered().title("Input"));
     f.render_widget(input, input_area);
+    f.render_widget(messages, messages_area);
     match app.input_mode {
         InputMode::Normal =>
             // Hide the cursor. `Frame` does this by default, so we don't need to do anything here
@@ -255,18 +308,6 @@ fn ui(f: &mut Frame, app: &App) {
             );
         }
     }
-
-    let messages: Vec<ListItem> = app
-        .messages
-        .iter()
-        .enumerate()
-        .map(|(i, m)| {
-            let content = Line::from(Span::raw(format!("{i}: {m}")));
-            ListItem::new(content)
-        })
-        .collect();
-    let messages = List::new(messages).block(Block::bordered().title("Messages"));
-    f.render_widget(messages, messages_area);
 }
 
 fn _test_passrus() {
