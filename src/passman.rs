@@ -1,8 +1,11 @@
 use crate::cryptman;
+use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::io::prelude::*;
 use std::{collections::HashMap, usize};
 
-#[derive(Clone,Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Container {
     pub name: String,
     pub children: HashMap<String, Container>,
@@ -66,7 +69,6 @@ pub struct Entry {
 }
 
 impl Entry {
-
     /// returns a JSON representation of the entry as a string.
     pub fn to_json_string(&mut self) -> String {
         serde_json::to_string(self).unwrap()
@@ -96,22 +98,30 @@ impl Entry {
             parent: "".to_owned(),
         }
     }
-    pub fn encrypt_password(&mut self,key:[u8;32],nonce:[u8;24],salt:[u8;32]) -> Result<(),anyhow::Error> {
-
-        let binding = cryptman::encrypt_file_mem_with_salt(self.pass_vec.clone(), "", &key, &nonce, &salt)?;
+    pub fn encrypt_password(
+        &mut self,
+        key: [u8; 32],
+        nonce: [u8; 24],
+        salt: [u8; 32],
+    ) -> Result<(), anyhow::Error> {
+        let binding =
+            cryptman::encrypt_file_mem_with_salt(self.pass_vec.clone(), "", &key, &nonce, &salt)?;
         self.pass_vec = binding;
         Ok(())
     }
 
-    pub fn decrypt_password(&mut self,password:&str) -> Result<(),anyhow::Error> {
-
-        let binding = cryptman::decrypt_file_mem_gen_key(self.pass_vec.clone(),"", password)?;
+    pub fn decrypt_password(&mut self, password: &str) -> Result<(), anyhow::Error> {
+        let binding = cryptman::decrypt_file_mem_gen_key(self.pass_vec.clone(), "", password)?;
         self.pass_vec = binding;
         Ok(())
     }
 }
 
-pub fn get_entries_by_field(container: &Container, field_name: &str, target_value: &str) -> Vec<Entry> {
+pub fn get_entries_by_field(
+    container: &Container,
+    field_name: &str,
+    target_value: &str,
+) -> Vec<Entry> {
     let mut result = Vec::new();
 
     // Check entries in the current container
@@ -143,15 +153,17 @@ pub fn get_entries_by_field(container: &Container, field_name: &str, target_valu
 
     // Recursively check subcontainers
     for child_container in container.children.values() {
-        result.extend(get_entries_by_field(child_container, field_name, target_value));
+        result.extend(get_entries_by_field(
+            child_container,
+            field_name,
+            target_value,
+        ));
     }
 
     result
 }
 
-pub fn flatten(
-    parent: &Container,
-) -> Result<HashMap<String, Entry>, anyhow::Error> {
+pub fn flatten(parent: &Container) -> Result<HashMap<String, Entry>, anyhow::Error> {
     let mut entries: HashMap<String, Entry> = HashMap::new();
 
     // Add entries from the current container.
@@ -166,4 +178,59 @@ pub fn flatten(
     }
 
     Ok(entries)
+}
+
+pub fn open_store(path: String, pass: String) -> Result<Container, anyhow::Error> {
+    let mut f = fs::File::open(path)?;
+    let mut buffer = [0; 10];
+
+    // read up to 10 bytes
+    f.read(&mut buffer)?;
+
+    let mut buffer = Vec::new();
+    // read the whole file
+    f.read_to_end(&mut buffer)?;
+
+    // read into a String, so that you don't need to do the conversion.
+    let mut buffer = String::new();
+    f.read_to_string(&mut buffer)?;
+
+    let mut passes: Container = Container::new("");
+    let dec_res = cryptman::decrypt_file_mem_gen_key(buffer.as_bytes().to_vec(), "", &pass)?;
+    passes.from_json_arr(dec_res.as_slice())?;
+    Ok(passes)
+}
+
+pub fn write_store(
+    path: String,
+    mut container: Container,
+    pass: String,
+) -> Result<(), anyhow::Error> {
+    let binding = container.to_json_string();
+    let json_arr = binding.as_bytes();
+
+    //generate a password and salt, keep them to be written to the encrypted file.
+    let key_n_salt = match cryptman::pass_2_key(&pass, [0u8; 32]) {
+        Ok(res) => res,
+        Err(error) => return Err(anyhow::Error::msg(error)),
+    };
+
+    let key = key_n_salt.0;
+    let salt = key_n_salt.1;
+
+    let mut nonce = [0u8; 24];
+    OsRng.fill_bytes(&mut nonce);
+
+    // encrypt the file
+    let enc_res = cryptman::encrypt_file_mem_with_salt(json_arr.to_vec(), "", &key, &nonce, &salt)?;
+    // ... later in code
+    let mut file = fs::OpenOptions::new()
+        // .create(true) // To create a new file
+        .write(true)
+        // either use the ? operator or unwrap since it returns a Result
+        .open(path)?;
+
+    // _ used to still break on error with ? operator
+    let _ = file.write_all(&enc_res)?;
+    Ok(())
 }

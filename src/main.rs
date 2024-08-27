@@ -1,313 +1,100 @@
-use log::{info, warn};
+use log::warn;
 use rand::{rngs::OsRng, RngCore};
-use ratatui::widgets::{Row, Table};
 use std::process::exit;
 mod cryptman;
 mod passman;
-mod tui;
+use clap::{Parser, Subcommand};
 use std::fs;
-use std::{collections::HashMap, usize};
-use std::{error::Error, io};
+use std::io::{self, Write};
 
-use ratatui::{
-    backend::{Backend, CrosstermBackend},
-    crossterm::{
-        event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
-        execute,
-        terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+/// Simple program to greet a person
+#[derive(Parser, Debug)]
+#[clap(version)]
+struct Args {
+    #[command(subcommand)]
+    cmd: Commands,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    // Files is a top level subcommand, and has an action with the tag "subcommand"
+    // the field action relates to the FilesCommands enum, containing it's subcommands.
+    Files {
+        #[command(subcommand)]
+        action: FilesCommands,
     },
-    layout::{Constraint, Layout},
-    style::{Color, Modifier, Style, Stylize},
-    terminal::{Frame, Terminal},
-    text::{Line, Text},
-    widgets::{Block, Paragraph},
-};
 
-enum InputMode {
-    Normal,
-    Editing,
+    // write has no subcommands, so the contents of the command are declared here,
+    // the variables are declared, with short and longhand declared above each.
+    Write {
+        #[clap(short = 'p', long)]
+        path: Option<String>,
+    },
+
+    Read {
+        #[clap(short = 'p', long)]
+        path: Option<String>,
+        pass: Option<String>,
+    },
 }
 
-/// App holds the state of the application
-struct App {
-    /// Current value of the input box
-    input: String,
-    /// Position of cursor in the editor area.
-    character_index: usize,
-    /// Current input mode
-    input_mode: InputMode,
+// Subcommands for the Files command, declared as the top level subcommands are
+#[derive(Subcommand, Debug)]
+enum FilesCommands {
+    Write {
+        #[clap(short = 'p', long)]
+        path: Option<String>,
+    },
 
-    key: [u8; 32],
-    salt: [u8; 32],
-
-    parent_container: passman::Container,
-    entries: HashMap<String, passman::Entry>,
+    Read {
+        #[clap(short = 'p', long)]
+        path: Option<String>,
+        pass: Option<String>,
+    },
 }
 
-impl App {
-    pub fn new() -> Self {
-        let c = passman::Container::new("");
-        let m: HashMap<String, passman::Entry> = HashMap::new();
-        Self {
-            input: String::new(),
-            input_mode: InputMode::Normal,
-            character_index: 0,
-            key: [0u8; 32],
-            salt: [0u8; 32],
-            parent_container: c,
-            entries: m,
+fn main() -> Result<(), anyhow::Error> {
+    let args = Args::parse();
+    match &args.cmd {
+        // files is the top level subcommand, and the match covers all the
+        // nested subcommands under it
+        Commands::Files { action } => match action {
+            FilesCommands::Write { path } => {
+                let path = path.as_deref().unwrap_or("default.txt");
+                write_file(path)?;
+            }
+            FilesCommands::Read { path, pass } => {
+                let path = path.as_deref().unwrap_or("default.txt");
+                let pass = pass.as_deref().unwrap_or("password");
+                read_file(path, pass)?;
+            }
+        },
+        Commands::Write { path } => {
+            let path = path.as_deref().unwrap_or("default.txt");
+            write_file(path)?;
+        }
+        Commands::Read { path, pass } => {
+            let path = path.as_deref().unwrap_or("default.txt");
+            let pass = pass.as_deref().unwrap_or("password");
+            read_file(path, pass)?;
         }
     }
-
-    fn move_cursor_left(&mut self) {
-        let cursor_moved_left = self.character_index.saturating_sub(1);
-        self.character_index = self.clamp_cursor(cursor_moved_left);
-    }
-
-    fn move_cursor_right(&mut self) {
-        let cursor_moved_right = self.character_index.saturating_add(1);
-        self.character_index = self.clamp_cursor(cursor_moved_right);
-    }
-
-    fn enter_char(&mut self, new_char: char) {
-        let index = self.byte_index();
-        self.input.insert(index, new_char);
-        self.move_cursor_right();
-    }
-
-    /// Returns the byte index based on the character position.
-    ///
-    /// Since each character in a string can be contain multiple bytes, it's necessary to calculate
-    /// the byte index based on the index of the character.
-    fn byte_index(&self) -> usize {
-        self.input
-            .char_indices()
-            .map(|(i, _)| i)
-            .nth(self.character_index)
-            .unwrap_or(self.input.len())
-    }
-
-    fn delete_char(&mut self) {
-        let is_not_cursor_leftmost = self.character_index != 0;
-        if is_not_cursor_leftmost {
-            // Method "remove" is not used on the saved text for deleting the selected char.
-            // Reason: Using remove on String works on bytes instead of the chars.
-            // Using remove would require special care because of char boundaries.
-
-            let current_index = self.character_index;
-            let from_left_to_current_index = current_index - 1;
-
-            // Getting all characters before the selected character.
-            let before_char_to_delete = self.input.chars().take(from_left_to_current_index);
-            // Getting all characters after selected character.
-            let after_char_to_delete = self.input.chars().skip(current_index);
-
-            // Put all characters together except the selected one.
-            // By leaving the selected one out, it is forgotten and therefore deleted.
-            self.input = before_char_to_delete.chain(after_char_to_delete).collect();
-            self.move_cursor_left();
-        }
-    }
-
-    fn clamp_cursor(&self, new_cursor_pos: usize) -> usize {
-        new_cursor_pos.clamp(0, self.input.chars().count())
-    }
-
-    fn reset_cursor(&mut self) {
-        self.character_index = 0;
-    }
-
-    fn accept_password(&mut self) {
-        if self.input != "" {
-            let _crypt_string = match fs::read_to_string("parent.json") {
-                Ok(d) => {
-                    let _res =
-                        match cryptman::decrypt_file_mem_gen_key(d.into(), "", self.input.as_str())
-                        {
-                            Ok(pc) => {
-                                let _string = match String::from_utf8(pc.clone()) {
-                                    Ok(s) => {
-                                        let res = self.parent_container.from_json_string(&s);
-                                        match res {
-                                            Ok(_) => {
-                                                self.load_entries().unwrap();
-                                            }
-                                            Err(_) => {}
-                                        }
-                                    }
-                                    Err(error) => {
-                                        info!("error parsing string: {error:?}");
-                                    }
-                                };
-                            }
-                            Err(err) => {
-                                info!("decryption whoopsie: {err:?}");
-                            }
-                        };
-                }
-                Err(err) => {
-                    info!("reading whoopsie: {err:?}");
-                }
-            };
-        };
-        let res = cryptman::pass_2_key(self.input.as_str(), [0u8; 32]).unwrap();
-        self.key = res.0;
-        self.salt = res.1;
-        self.input.clear();
-        self.reset_cursor();
-    }
-
-    fn load_entries(&mut self) -> Result<(), anyhow::Error> {
-        let cont = &self.parent_container;
-        self.entries = passman::flatten(&cont)?;
-        Ok(())
-    }
-}
-
-fn main() -> Result<(), Box<dyn Error>> {
-    // setup terminal
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    // create app and run it
-    let app = App::new();
-    let res = run_app(&mut terminal, app);
-
-    // restore terminal
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-
-    if let Err(err) = res {
-        println!("{err:?}");
-    }
-
     Ok(())
 }
 
-fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<()> {
-    loop {
-        terminal.draw(|f| ui(f, &app))?;
-
-        if let Event::Key(key) = event::read()? {
-            match app.input_mode {
-                InputMode::Normal => match key.code {
-                    KeyCode::Char('e') => {
-                        app.input_mode = InputMode::Editing;
-                    }
-                    KeyCode::Char('q') => {
-                        return Ok(());
-                    }
-                    _ => {}
-                },
-                InputMode::Editing if key.kind == KeyEventKind::Press => match key.code {
-                    KeyCode::Enter => app.accept_password(),
-                    KeyCode::Char(to_insert) => {
-                        app.enter_char(to_insert);
-                    }
-                    KeyCode::Backspace => {
-                        app.delete_char();
-                    }
-                    KeyCode::Left => {
-                        app.move_cursor_left();
-                    }
-                    KeyCode::Right => {
-                        app.move_cursor_right();
-                    }
-                    KeyCode::Esc => {
-                        app.input_mode = InputMode::Normal;
-                    }
-                    _ => {}
-                },
-                InputMode::Editing => {}
-            }
-        }
-    }
+fn read_file(path: &str, pass: &str) -> Result<(), anyhow::Error> {
+    let mut cont = passman::open_store(path.to_owned(), pass.to_owned())?;
+    let out = cont.to_json_string();
+    println!("{}", out);
+    Ok(())
 }
 
-fn ui(f: &mut Frame, app: &App) {
-    let vertical = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(3),
-        Constraint::Min(1),
-    ]);
-    let [help_area, input_area, messages_area] = vertical.areas(f.size());
-
-    let (msg, style) = match app.input_mode {
-        InputMode::Normal => (
-            vec![
-                "Press ".into(),
-                "q".bold(),
-                " to exit, ".into(),
-                "e".bold(),
-                " to start editing.".bold(),
-            ],
-            Style::default().add_modifier(Modifier::RAPID_BLINK),
-        ),
-        InputMode::Editing => (
-            vec![
-                "Press ".into(),
-                "Esc".bold(),
-                " to stop editing, ".into(),
-                "Enter".bold(),
-                " to record the message".into(),
-            ],
-            Style::default(),
-        ),
-    };
-    let text = Text::from(Line::from(msg)).patch_style(style);
-    let help_message = Paragraph::new(text);
-    f.render_widget(help_message, help_area);
-    let mut rows: Vec<Row> = vec![];
-    let header = Row::new(vec![
-        "url".to_owned(),
-        "email".to_owned(),
-        "username".to_owned(),
-    ]);
-    for (_key, val) in &app.entries {
-        let mut row: Vec<String> = vec![];
-        row.push(val.url.to_owned());
-        row.push(val.email.clone());
-        row.push(val.username.clone());
-        let r = Row::default().cells(row);
-        rows.push(r)
-    }
-    let messages = Table::new(rows, [Constraint::Length(7), Constraint::Length(30)])
-        .block(Block::bordered().title("table"))
-        .header(header);
-    let input = Paragraph::new(app.input.as_str())
-        .style(match app.input_mode {
-            InputMode::Normal => Style::default(),
-            InputMode::Editing => Style::default().fg(Color::Yellow),
-        })
-        .block(Block::bordered().title("Input"));
-    f.render_widget(input, input_area);
-    f.render_widget(messages, messages_area);
-    match app.input_mode {
-        InputMode::Normal =>
-            // Hide the cursor. `Frame` does this by default, so we don't need to do anything here
-            {}
-
-        InputMode::Editing => {
-            // Make the cursor visible and ask ratatui to put it at the specified coordinates after
-            // rendering
-            #[allow(clippy::cast_possible_truncation)]
-            f.set_cursor(
-                // Draw the cursor at the current position in the input field.
-                // This position is can be controlled via the left and right arrow key
-                input_area.x + app.character_index as u16 + 1,
-                // Move one line down, from the border to the input line
-                input_area.y + 1,
-            );
-        }
-    }
+fn write_file(path: &str) -> io::Result<()> {
+    let mut file = fs::File::create(path)?;
+    let content = "Hello, World!";
+    file.write_all(content.as_bytes())?;
+    println!("Content written to {}", path);
+    Ok(())
 }
 
 fn _test_passrus() {
