@@ -1,0 +1,2 @@
+[alias]
+TestAndBuild = "test && build"
