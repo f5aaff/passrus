@@ -1,3 +1,4 @@
+use chacha20poly1305::aead::Buffer;
 use log::warn;
 use rand::{rngs::OsRng, RngCore};
 use std::process::exit;
@@ -7,6 +8,12 @@ use anyhow::{anyhow, Context, Result};
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
+
+struct State {
+    pub store_path: String,
+    pub current_container: passman::Container,
+    pub last_pass: String,
+}
 
 fn handle_client(mut stream: UnixStream) {
     let mut buffer = [0; 1024]; // Buffer to store incoming data
@@ -27,8 +34,12 @@ fn handle_client(mut stream: UnixStream) {
 }
 fn main() -> std::io::Result<()> {
     let socket_path = "/tmp/rust_echo_service.sock";
-    let store_path = "/tmp/store";
-
+    let store_path: &str = "/tmp/store";
+    let mut state = State {
+        store_path: store_path.to_owned(),
+        current_container: passman::Container::new("new"),
+        last_pass: String::new(),
+    };
     // Remove any existing socket file
     if fs::metadata(socket_path).is_ok() {
         fs::remove_file(socket_path)?;
@@ -50,9 +61,89 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
+fn input_from_client(input: String, mut state: State) -> Result<String, anyhow::Error> {
+    let mut input_str = &input;
+    let mut args = input_str.split(" ");
+    let mut response: String = String::from("passrus");
+    match args.nth(0).unwrap() {
+        "open" => match args.nth(1).unwrap() {
+            "" => response = String::from("password required. Container is locked."),
+            _ => {
+                let nth = args.nth(1).clone();
+                state.current_container = match open_store(state.store_path, nth.unwrap()) {
+                    Ok(res) => {
+                        response = String::from("Password accepted, pass store opened.");
+                        res
+                    }
+
+                    Err(error) => {
+                        response = format!("error opening store: {error:?}");
+                        state.current_container
+                    }
+                };
+            }
+        },
+        "close" => {
+            match close_store(state.current_container, state.store_path, state.last_pass) {
+                Ok(_) => {
+                    response = String::from("store closed successfully.");
+                }
+                Err(error) => {
+                    response = format!("error closing store: {error:?}");
+                }
+            };
+        }
+        "get" => match args.nth(1).unwrap() {
+            "" => {
+                response = String::from("provide a target field");
+            }
+            _ => {
+                let target = args.nth(1).unwrap();
+                match args.nth(2).unwrap() {
+                    "" => {
+                        response = String::from("provide a value to search by");
+                    }
+                    _ => {
+                        let value = args.nth(2).unwrap();
+                        let mut entries = match get_entries_by_field(
+                            state.current_container,
+                            target.to_owned(),
+                            value.to_owned(),
+                            state.last_pass,
+                        ) {
+                            Ok(res) => res,
+                            Err(error) => {
+                                response = format!("error retrieving entries: {error:?}");
+                                Vec::new()
+                            }
+                        };
+                    }
+                }
+            }
+        },
+        "" => {
+            response = String::from("please provide an argument.");
+        }
+        _ => {
+            let unsupported_arg = args.nth(1).clone();
+            response = format!("{unsupported_arg:?} not recognised.");
+        }
+    }
+    Ok(response)
+}
+
+fn format_entries_as_table(entries: Vec<passman::Entry>) -> String {
+    let mut buf = String::new();
+
+    writeln!(&mut buf, "{:<20} | {:<5} | {:<15}", "Name", "Age", "City")?;
+    writeln!(&mut buf, "---------------------|-------|------------------")?;
+
+    buf
+}
+
 // given a string path to the store, and a string of the password, open a passman
 // store. returns the decrypted and instantiated container struct.
-fn open_store(store: String, pass: String) -> std::io::Result<passman::Container> {
+fn open_store(store: String, pass: &str) -> Result<passman::Container, anyhow::Error> {
     let mut file = File::open(store)?;
     let mut buf = Vec::new();
 
@@ -109,20 +200,11 @@ fn get_entries_by_field(
     target_field: String,
     target_value: String,
     password: String,
-) -> Result<Vec<passman::Entry>,anyhow::Error> {
-    let matching_entries = passman::get_entries_by_field(&store, &target_field, &target_value);
-    for mut entry in matching_entries {
-        let vec = &entry.pass_vec;
-        let vec = &vec.clone();
-
-        let lossy_encrypted = String::from_utf8_lossy(vec.as_slice());
-        entry.pass_vec = cryptman::decrypt_file_mem_gen_key(entry.pass_vec, "", &password).unwrap();
-
-        let password = String::from_utf8_lossy(entry.pass_vec.as_slice());
-        println!(
-            "Username: {}\t encrypted:{}\t pass:{}",
-            entry.username, lossy_encrypted, password
-        );
+) -> Result<Vec<passman::Entry>, anyhow::Error> {
+    let mut matching_entries = passman::get_entries_by_field(&store, &target_field, &target_value);
+    for entry in &mut matching_entries {
+        entry.pass_vec =
+            cryptman::decrypt_file_mem_gen_key(entry.pass_vec.clone(), "", &password).unwrap();
     }
     Ok(matching_entries)
 }
