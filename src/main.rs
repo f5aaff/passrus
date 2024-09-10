@@ -5,33 +5,49 @@ use std::process::exit;
 mod cryptman;
 mod passman;
 use anyhow::{anyhow, Context, Result};
+use std::fmt::Write as fmtWrite;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 
+#[derive(Clone)]
 struct State {
     pub store_path: String,
     pub current_container: passman::Container,
     pub last_pass: String,
 }
 
-fn handle_client(mut stream: UnixStream) {
+fn handle_client(mut stream: UnixStream, state: &State) {
     let mut buffer = [0; 1024]; // Buffer to store incoming data
+
     match stream.read(&mut buffer) {
         Ok(n) if n > 0 => {
             let received_message = String::from_utf8_lossy(&buffer[..n]);
             println!("Received: {}", received_message);
 
-            // Echo back the message
-            stream
-                .write_all(&buffer[..n])
-                .expect("Failed to send response");
+            // Generate response from the client input and state
+            let response = match input_from_client(received_message.to_string(), state.clone()) {
+                Ok(res) => res,
+                Err(error) => {
+                    format!("{error:?}")
+                }
+            };
+
+            // Write the response string to the stream
+            if let Err(e) = stream.write_all(response.as_bytes()) {
+                eprintln!("Failed to send response: {}", e);
+            }
         }
-        _ => {
-            eprintln!("Failed to read from the client");
+        Ok(_) => {
+            // No data read (EOF or similar), you might want to handle this case
+            eprintln!("No data read from the client");
+        }
+        Err(e) => {
+            eprintln!("Failed to read from the client: {}", e);
         }
     }
 }
+
 fn main() -> std::io::Result<()> {
     let socket_path = "/tmp/rust_echo_service.sock";
     let store_path: &str = "/tmp/store";
@@ -53,7 +69,7 @@ fn main() -> std::io::Result<()> {
     // Accept incoming connections in a loop
     for stream in listener.incoming() {
         match stream {
-            Ok(stream) => handle_client(stream),
+            Ok(stream) => handle_client(stream, &state),
             Err(err) => eprintln!("Connection failed: {}", err),
         }
     }
@@ -65,12 +81,14 @@ fn input_from_client(input: String, mut state: State) -> Result<String, anyhow::
     let mut input_str = &input;
     let mut args = input_str.split(" ");
     let mut response: String = String::from("passrus");
-    match args.nth(0).unwrap() {
-        "open" => match args.nth(1).unwrap() {
+    let command = args.nth(1).unwrap();
+    let arg1 = args.nth(2).unwrap();
+    let arg2 = args.nth(3).unwrap();
+    match command {
+        "open" => match arg1 {
             "" => response = String::from("password required. Container is locked."),
             _ => {
-                let nth = args.nth(1).clone();
-                state.current_container = match open_store(state.store_path, nth.unwrap()) {
+                state.current_container = match open_store(state.store_path, arg1) {
                     Ok(res) => {
                         response = String::from("Password accepted, pass store opened.");
                         res
@@ -93,19 +111,19 @@ fn input_from_client(input: String, mut state: State) -> Result<String, anyhow::
                 }
             };
         }
-        "get" => match args.nth(1).unwrap() {
+        "get" => match arg1 {
             "" => {
                 response = String::from("provide a target field");
             }
             _ => {
-                let target = args.nth(1).unwrap();
-                match args.nth(2).unwrap() {
+                let target = arg1;
+                match arg2 {
                     "" => {
                         response = String::from("provide a value to search by");
                     }
                     _ => {
-                        let value = args.nth(2).unwrap();
-                        let mut entries = match get_entries_by_field(
+                        let value = arg2;
+                        let entries = match get_entries_by_field(
                             state.current_container,
                             target.to_owned(),
                             value.to_owned(),
@@ -117,6 +135,7 @@ fn input_from_client(input: String, mut state: State) -> Result<String, anyhow::
                                 Vec::new()
                             }
                         };
+                        response = format_structs_as_table(entries);
                     }
                 }
             }
@@ -125,22 +144,47 @@ fn input_from_client(input: String, mut state: State) -> Result<String, anyhow::
             response = String::from("please provide an argument.");
         }
         _ => {
-            let unsupported_arg = args.nth(1).clone();
+            let unsupported_arg = args.nth(2).clone();
             response = format!("{unsupported_arg:?} not recognised.");
         }
     }
     Ok(response)
 }
 
-fn format_entries_as_table(entries: Vec<passman::Entry>) -> String {
-    let mut buf = String::new();
+fn format_structs_as_table(entries: Vec<passman::Entry>) -> String {
+    // Create a buffer to hold the result
+    let mut buffer = String::new();
 
-    writeln!(&mut buf, "{:<20} | {:<5} | {:<15}", "Name", "Age", "City")?;
-    writeln!(&mut buf, "---------------------|-------|------------------")?;
+    // Write table headers (the struct fields)
+    writeln!(
+        &mut buffer,
+        "{:<20} | {:<5} | {:<15}| {:<20} | {:<20} ",
+        "Username", "Email", "Url", "Parent", "Password"
+    )
+    .unwrap();
+    writeln!(
+        &mut buffer,
+        "---------------------|-------|------------------"
+    )
+    .unwrap();
 
-    buf
+    // Iterate over each struct and write their values
+    for entry in entries {
+        writeln!(
+            &mut buffer,
+            "{:<20} | {:<5} | {:<15}| {:<20} | {:<20} ",
+            entry.username,
+            entry.email,
+            entry.url,
+            entry.parent,
+            String::from_utf8_lossy(entry.pass_vec.as_slice()),
+        )
+        .unwrap();
+    }
+
+    // Return the formatted buffer as a string
+    buffer
 }
-
 // given a string path to the store, and a string of the password, open a passman
 // store. returns the decrypted and instantiated container struct.
 fn open_store(store: String, pass: &str) -> Result<passman::Container, anyhow::Error> {

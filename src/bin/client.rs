@@ -1,5 +1,6 @@
 use std::os::unix::net::UnixStream;
 use std::io::{Write, Read};
+use std::env;
 
 fn main() -> std::io::Result<()> {
     let socket_path = "/tmp/rust_echo_service.sock";
@@ -8,10 +9,11 @@ fn main() -> std::io::Result<()> {
     let mut stream = UnixStream::connect(socket_path)?;
 
     // The message to send
-    let message = b"Hello from the client!\n";
+    let args: Vec<String> = env::args().collect();
+    let message = format!("{:?}\n",args);
 
     // Send the message to the server
-    stream.write_all(message)?;
+    stream.write_all(message.as_bytes())?;
 
     // Receive the echoed response
     let mut buffer = [0; 1024];
@@ -19,7 +21,7 @@ fn main() -> std::io::Result<()> {
 
     // Print the response from the server
     let echoed_message = String::from_utf8_lossy(&buffer[..n]);
-    println!("Received echoed message: {}", echoed_message);
+    println!("passrus: {}", echoed_message);
 
     Ok(())
 }
