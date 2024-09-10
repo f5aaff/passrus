@@ -1,13 +1,12 @@
-use chacha20poly1305::aead::Buffer;
 use log::warn;
 use rand::{rngs::OsRng, RngCore};
 use std::process::exit;
 mod cryptman;
 mod passman;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use std::fmt::Write as fmtWrite;
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 
 #[derive(Clone)]
@@ -24,7 +23,7 @@ fn handle_client(mut stream: UnixStream, state: &State) {
         Ok(n) if n > 0 => {
             let received_message = String::from_utf8_lossy(&buffer[..n]);
             println!("Received: {}", received_message);
-
+            println!("toString: {}", received_message.to_string());
             // Generate response from the client input and state
             let response = match input_from_client(received_message.to_string(), state.clone()) {
                 Ok(res) => res,
@@ -51,7 +50,7 @@ fn handle_client(mut stream: UnixStream, state: &State) {
 fn main() -> std::io::Result<()> {
     let socket_path = "/tmp/rust_echo_service.sock";
     let store_path: &str = "/tmp/store";
-    let mut state = State {
+    let state = State {
         store_path: store_path.to_owned(),
         current_container: passman::Container::new("new"),
         last_pass: String::new(),
@@ -78,29 +77,39 @@ fn main() -> std::io::Result<()> {
 }
 
 fn input_from_client(input: String, mut state: State) -> Result<String, anyhow::Error> {
-    let mut input_str = &input;
-    let mut args = input_str.split(" ");
-    let mut response: String = String::from("passrus");
-    let command = args.nth(1).unwrap();
-    let arg1 = args.nth(2).unwrap();
-    let arg2 = args.nth(3).unwrap();
-    match command {
-        "open" => match arg1 {
-            "" => response = String::from("password required. Container is locked."),
-            _ => {
-                state.current_container = match open_store(state.store_path, arg1) {
-                    Ok(res) => {
-                        response = String::from("Password accepted, pass store opened.");
-                        res
-                    }
+    let input_str = &input;
+    let mut args = input_str.split_whitespace();
+    let response: String;
 
-                    Err(error) => {
-                        response = format!("error opening store: {error:?}");
-                        state.current_container
-                    }
-                };
+    let _ = args.next();
+
+    let command = clean_arg(args.next().unwrap_or_default());
+
+    let arg1 = clean_arg(args.next().unwrap_or_default());
+
+
+    let arg2 = clean_arg(args.next().unwrap_or_default());
+
+    match command {
+        "open" => {
+            println!("OPEN");
+            match arg1 {
+                "" => response = String::from("password required. Container is locked."),
+                _ => {
+                    state.current_container = match open_store(state.store_path, arg1) {
+                        Ok(res) => {
+                            response = String::from("Password accepted, pass store opened.");
+                            res
+                        }
+
+                        Err(error) => {
+                            response = format!("error opening store: {error:?}");
+                            state.current_container
+                        }
+                    };
+                }
             }
-        },
+        }
         "close" => {
             match close_store(state.current_container, state.store_path, state.last_pass) {
                 Ok(_) => {
@@ -111,6 +120,7 @@ fn input_from_client(input: String, mut state: State) -> Result<String, anyhow::
                 }
             };
         }
+
         "get" => match arg1 {
             "" => {
                 response = String::from("provide a target field");
@@ -130,10 +140,7 @@ fn input_from_client(input: String, mut state: State) -> Result<String, anyhow::
                             state.last_pass,
                         ) {
                             Ok(res) => res,
-                            Err(error) => {
-                                response = format!("error retrieving entries: {error:?}");
-                                Vec::new()
-                            }
+                            Err(_) => Vec::new(),
                         };
                         response = format_structs_as_table(entries);
                     }
@@ -144,13 +151,42 @@ fn input_from_client(input: String, mut state: State) -> Result<String, anyhow::
             response = String::from("please provide an argument.");
         }
         _ => {
-            let unsupported_arg = args.nth(2).clone();
-            response = format!("{unsupported_arg:?} not recognised.");
+            println!("{} {} {}", command, arg1, arg2);
+            let start = trim_start_pattern(command, "\"");
+            let trimmed = trim_end_pattern(start, "\",");
+            response = format!("{trimmed:?} not recognised.");
         }
     }
     Ok(response)
 }
+fn clean_arg<'a>(s: &'a str) -> &'a str {
+   let start = trim_start_pattern(s, "\"");
+   let end = trim_end_pattern(start, "\",");
+   let end = trim_end_pattern(end,"\"]");
+   end
+}
+fn trim_start_pattern<'a>(s: &'a str, pattern: &str) -> &'a str {
+    let pattern_len = pattern.len();
+    let mut start_index = 0;
+    while s[start_index..].starts_with(pattern) {
+        start_index += pattern_len;
+        if start_index >= s.len() {
+            return "";
+        }
+    }
 
+    &s[start_index..]
+}
+
+fn trim_end_pattern<'a>(s: &'a str, pattern: &str) -> &'a str {
+    let pattern_len = pattern.len();
+    let mut end_index = s.len();
+    while end_index > 0 && s[end_index - pattern_len..end_index] == *pattern {
+        end_index -= pattern_len;
+    }
+
+    &s[..end_index]
+}
 fn format_structs_as_table(entries: Vec<passman::Entry>) -> String {
     // Create a buffer to hold the result
     let mut buffer = String::new();
