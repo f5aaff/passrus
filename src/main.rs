@@ -4,6 +4,8 @@ use std::process::exit;
 mod cryptman;
 mod passman;
 use anyhow::{anyhow, Result};
+use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fmt::Write as fmtWrite;
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -23,7 +25,7 @@ fn handle_client(mut stream: UnixStream, state: &State) {
         Ok(n) if n > 0 => {
             let received_message = String::from_utf8_lossy(&buffer[..n]);
             println!("Received: {}", received_message);
-            println!("toString: {}", received_message.to_string());
+
             // Generate response from the client input and state
             let response = match input_from_client(received_message.to_string(), state.clone()) {
                 Ok(res) => res,
@@ -76,117 +78,161 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-fn input_from_client(input: String, mut state: State) -> Result<String, anyhow::Error> {
-    let input_str = &input;
-    let mut args = input_str.split_whitespace();
-    let response: String;
+// type def for command handler functions
+type CommandHandler = fn(&mut State, &str, &str) -> Result<String, anyhow::Error>;
 
-    let _ = args.next();
+// struct def for overall command processor struct,
+// contains Hashmap of CommandHandler functions
+struct CommandProcessor {
+    handlers: HashMap<String, CommandHandler>,
+}
 
-    let command = clean_arg(args.next().unwrap_or_default());
+impl CommandProcessor {
+    // on new CommandProcessor, generate a hashmap containing the command handler functions
+    fn new() -> Self {
+        let mut handlers = HashMap::new();
+        handlers.insert("open".to_string(), handle_open as CommandHandler);
+        handlers.insert("close".to_string(), handle_close as CommandHandler);
+        handlers.insert("get".to_string(), handle_get as CommandHandler);
+        handlers.insert("new".to_string(), handle_new as CommandHandler);
+        Self { handlers }
+    }
 
-    let arg1 = clean_arg(args.next().unwrap_or_default());
-
-
-    let arg2 = clean_arg(args.next().unwrap_or_default());
-
-    match command {
-        "open" => {
-            println!("OPEN");
-            match arg1 {
-                "" => response = String::from("password required. Container is locked."),
-                _ => {
-                    state.current_container = match open_store(state.store_path, arg1) {
-                        Ok(res) => {
-                            response = String::from("Password accepted, pass store opened.");
-                            res
-                        }
-
-                        Err(error) => {
-                            response = format!("error opening store: {error:?}");
-                            state.current_container
-                        }
-                    };
-                }
-            }
-        }
-        "close" => {
-            match close_store(state.current_container, state.store_path, state.last_pass) {
-                Ok(_) => {
-                    response = String::from("store closed successfully.");
-                }
-                Err(error) => {
-                    response = format!("error closing store: {error:?}");
-                }
-            };
-        }
-
-        "get" => match arg1 {
-            "" => {
-                response = String::from("provide a target field");
-            }
-            _ => {
-                let target = arg1;
-                match arg2 {
-                    "" => {
-                        response = String::from("provide a value to search by");
-                    }
-                    _ => {
-                        let value = arg2;
-                        let entries = match get_entries_by_field(
-                            state.current_container,
-                            target.to_owned(),
-                            value.to_owned(),
-                            state.last_pass,
-                        ) {
-                            Ok(res) => res,
-                            Err(_) => Vec::new(),
-                        };
-                        response = format_structs_as_table(entries);
-                    }
-                }
-            }
-        },
-        "" => {
-            response = String::from("please provide an argument.");
-        }
-        _ => {
-            println!("{} {} {}", command, arg1, arg2);
-            let start = trim_start_pattern(command, "\"");
-            let trimmed = trim_end_pattern(start, "\",");
-            response = format!("{trimmed:?} not recognised.");
+    // when process_command is called, retrieve execute the handler command
+    fn process_command(&self, state: &mut State, command: &str, arg1: &str, arg2: &str) -> Result<String, anyhow::Error> {
+        if let Some(handler) = self.handlers.get(command) {
+            handler(state, arg1, arg2)
+        } else {
+            Ok(format!("{command:?} not recognised."))
         }
     }
-    Ok(response)
+
 }
+
+// commandHandler for opening the password store
+fn handle_open(state: &mut State, arg1: &str, _: &str) -> Result<String, anyhow::Error> {
+    if arg1.is_empty() {
+        return Ok("password required. Container is locked.".to_string());
+    }
+
+    let password = if state.last_pass.is_empty() {
+        arg1.to_string()
+    } else {
+        state.last_pass.clone()
+    };
+
+    state.current_container = match open_store(state.store_path.clone(), &password) {
+        Ok(container) => {
+            state.last_pass = password;
+            container
+        }
+        Err(error) => {
+            state.last_pass.clear();
+            return Ok(format!("error opening store: {:?}", error));
+        }
+    };
+
+    Ok("Password accepted, pass store opened.".to_string())
+}
+
+// commandHandler for closing the password store
+fn handle_close(state: &mut State, _: &str, _: &str) -> Result<String, anyhow::Error> {
+    match close_store(state.current_container.clone(), state.store_path.clone(), state.last_pass.clone()) {
+        Ok(_) => Ok("store closed successfully.".to_string()),
+        Err(error) => Ok(format!("error closing store: {:?}", error)),
+    }
+}
+
+
+// commandHandler for retrieving elements from the password store
+fn handle_get(state: &mut State, arg1: &str, arg2: &str) -> Result<String, anyhow::Error> {
+    if arg1.is_empty() {
+        return Ok("provide a target field".to_string());
+    }
+
+    if arg2.is_empty() {
+        return Ok("provide a value to search by".to_string());
+    }
+
+    let entries = match get_entries_by_field(
+        state.current_container.clone(),
+        arg1.to_string(),
+        arg2.to_string(),
+        state.last_pass.clone(),
+    ) {
+        Ok(entries) => entries,
+        Err(_) => Vec::new(),
+    };
+
+    Ok(format_structs_as_table(entries))
+}
+
+
+// commandHandler for creating a password store
+fn handle_new(state: &mut State, arg1: &str, arg2: &str) -> Result<String, anyhow::Error> {
+    if arg1.is_empty() {
+        return Ok("new requires an argument (e.g store,container,entry)".to_string());
+    }
+
+    match arg1 {
+        "store" => {
+            if arg2.is_empty() {
+                return Ok("creating a store requires a password as the 2nd arg".to_string());
+            }
+
+            let path = Cow::Borrowed(&state.store_path);
+
+            state.current_container = create_store(state.current_container.clone(), path.to_string(), arg2)?;
+            Ok(format!("store created at: {}", path.to_string()))
+        }
+        _ => Ok(format!("{arg1:?} not recognised.")),
+    }
+}
+
+// function to take the input from the socket message, process the arguments, then create the
+// response.
+fn input_from_client(input: String, mut state: State) -> Result<String, anyhow::Error> {
+    let mut args = input.split_whitespace();
+
+    let _ = args.next(); // Skip the first argument (command name)
+
+    let command = clean_arg(args.next().unwrap_or_default());
+    let arg1 = clean_arg(args.next().unwrap_or_default());
+    let arg2 = clean_arg(args.next().unwrap_or_default());
+
+    let processor = CommandProcessor::new();
+    processor.process_command(&mut state, &command, &arg1, &arg2)
+}
+
 fn clean_arg<'a>(s: &'a str) -> &'a str {
-   let start = trim_start_pattern(s, "\"");
-   let end = trim_end_pattern(start, "\",");
-   let end = trim_end_pattern(end,"\"]");
-   end
-}
-fn trim_start_pattern<'a>(s: &'a str, pattern: &str) -> &'a str {
-    let pattern_len = pattern.len();
+    // Trim start pattern "\""
+    let start_pattern = "\"";
+    let pattern_len = start_pattern.len();
     let mut start_index = 0;
-    while s[start_index..].starts_with(pattern) {
+    while s[start_index..].starts_with(start_pattern) {
         start_index += pattern_len;
         if start_index >= s.len() {
             return "";
         }
     }
 
-    &s[start_index..]
-}
+    // Slice the string after trimming the start
+    let mut trimmed_str = &s[start_index..];
 
-fn trim_end_pattern<'a>(s: &'a str, pattern: &str) -> &'a str {
-    let pattern_len = pattern.len();
-    let mut end_index = s.len();
-    while end_index > 0 && s[end_index - pattern_len..end_index] == *pattern {
-        end_index -= pattern_len;
+    // Trim end patterns "\",", "\"]"
+    let end_patterns = [ "\",", "\"]" ];
+    for end_pattern in &end_patterns {
+        let pattern_len = end_pattern.len();
+        let mut end_index = trimmed_str.len();
+        while end_index >= pattern_len && &trimmed_str[end_index - pattern_len..end_index] == *end_pattern {
+            end_index -= pattern_len;
+        }
+        trimmed_str = &trimmed_str[..end_index];
     }
 
-    &s[..end_index]
+    trimmed_str
 }
+
 fn format_structs_as_table(entries: Vec<passman::Entry>) -> String {
     // Create a buffer to hold the result
     let mut buffer = String::new();
@@ -221,6 +267,43 @@ fn format_structs_as_table(entries: Vec<passman::Entry>) -> String {
     // Return the formatted buffer as a string
     buffer
 }
+
+fn create_store(
+    current_store: passman::Container,
+    store_path: String,
+    pass: &str,
+) -> Result<passman::Container> {
+    let store = match current_store {
+        current if current.entries.is_empty() && current.children.is_empty() => {
+            let mut store = passman::Container::new("store");
+
+            let key_n_salt = cryptman::pass_2_key(&pass, [0u8; 32])
+                .map_err(|e| anyhow!("error generating key and salt: {:?}", e))?;
+
+            let (key, salt) = key_n_salt;
+
+            let binding = store.to_json_string();
+            let json_arr = binding.as_bytes();
+
+            // Generate a nonce to use, fill with random bytes with OsRng.
+            let mut nonce = [0u8; 24];
+            OsRng.fill_bytes(&mut nonce);
+
+            // Encrypt the file
+            let enc_res =
+                cryptman::encrypt_file_mem_with_salt(json_arr.to_vec(), "", &key, &nonce, &salt)?;
+
+            let mut file = File::create(&store_path)?;
+            file.write_all(&enc_res)?;
+
+            Ok(store)
+        }
+        _ => Ok(current_store),
+    };
+
+    store
+}
+
 // given a string path to the store, and a string of the password, open a passman
 // store. returns the decrypted and instantiated container struct.
 fn open_store(store: String, pass: &str) -> Result<passman::Container, anyhow::Error> {
@@ -289,171 +372,7 @@ fn get_entries_by_field(
     Ok(matching_entries)
 }
 
+
+// tests, not properly written yet, but it does exercise passman & cryptman.
 #[cfg(test)]
-mod tests {
-
-    use crate::cryptman;
-    use crate::passman;
-    use log::warn;
-    use rand::{rngs::OsRng, RngCore};
-    use std::process::exit;
-
-    #[test]
-    fn test() {
-        // obligatory garbage password
-        let pass = "password";
-
-        //generate a password and salt, keep them to be written to the encrypted file.
-        let key_n_salt = match cryptman::pass_2_key(pass, [0u8; 32]) {
-            Ok(res) => res,
-
-            Err(error) => {
-                println! {"rip: {error:?}"}
-                warn!(target:"main","error generating key and salt: {error:?}");
-                exit(0);
-            }
-        };
-
-        let key = key_n_salt.0;
-        let salt = key_n_salt.1;
-
-        let mut nonce = [0u8; 24];
-        OsRng.fill_bytes(&mut nonce);
-
-        let mut parent_container = passman::Container::new("parent_container");
-        let mut sub_container = passman::Container::new("sub_container");
-
-        let user1_pass = String::from("this is a terrible password")
-            .as_bytes()
-            .to_vec();
-
-        let user2_pass = String::from("this is also a terrible password")
-            .as_bytes()
-            .to_vec();
-
-        let user3_pass = String::from("this is also a terrible password")
-            .as_bytes()
-            .to_vec();
-
-        // adding entries to a container that has been instantiated beforehand
-        sub_container.add_entry(passman::Entry::new(
-            "user1",
-            user1_pass,
-            "user@email.com",
-            "test-site.com",
-        ));
-
-        sub_container.add_entry(passman::Entry::new(
-            "user2",
-            user2_pass,
-            "user2@email.com",
-            "test-site2.com",
-        ));
-
-        let mut nonce = [0u8; 24];
-        OsRng.fill_bytes(&mut nonce);
-        let _ = sub_container
-            .entries
-            .get_mut("test-site.com")
-            .unwrap()
-            .encrypt_password(key, nonce, salt);
-
-        let mut nonce = [0u8; 24];
-        OsRng.fill_bytes(&mut nonce);
-
-        let _ = sub_container
-            .entries
-            .get_mut("test-site2.com")
-            .unwrap()
-            .encrypt_password(key, nonce, salt);
-
-        // adding a new container as a child, then adding entries to it
-        sub_container.add_child(passman::Container::new("sub_sub_container"));
-
-        sub_container
-            .children
-            .get_mut("sub_sub_container")
-            .unwrap()
-            .add_entry(passman::Entry::new(
-                "user3",
-                user3_pass,
-                "user3@email.com",
-                "test-site3.com",
-            ));
-
-        let mut nonce = [0u8; 24];
-        OsRng.fill_bytes(&mut nonce);
-
-        // encrypting a password of an entry already in a nested container
-        let _ = sub_container
-            .children
-            .get_mut("sub_sub_container")
-            .unwrap()
-            .entries
-            .get_mut("test-site3.com")
-            .unwrap()
-            .encrypt_password(key, nonce, salt);
-
-        //adding a container as a child after instantiating it and adding entries to it.
-        parent_container.add_child(sub_container);
-
-        let binding = parent_container.to_json_string();
-        let json_arr = binding.as_bytes();
-
-        // generate a nonce to use, fill with random bytes with OsRng.
-        let mut nonce = [0u8; 24];
-        OsRng.fill_bytes(&mut nonce);
-
-        // encrypt the file
-        let enc_res = match cryptman::encrypt_file_mem_with_salt(
-            json_arr.to_vec(),
-            "",
-            &key,
-            &nonce,
-            &salt,
-        ) {
-            Ok(res) => {
-                println!("encrypted with key,salt&nonce successfully");
-                res
-            }
-            Err(error) => {
-                println!("rip: {error:?}");
-                exit(0);
-            }
-        };
-
-        // decrypt the content, reading it from file.
-        let dec_res = match cryptman::decrypt_file_mem_gen_key(enc_res, "", pass) {
-            Ok(res) => {
-                println!("grabbed salt&nonce from file, decrypted successfully");
-                res
-            }
-
-            Err(error) => {
-                warn!(target:"main","error decrypting data: {error:?}");
-                exit(0);
-            }
-        };
-
-        let mut passes: passman::Container = passman::Container::new("");
-        passes.from_json_arr(dec_res.as_slice()).unwrap();
-
-        let target_field = "url"; // Change to "email" if needed
-        let target_value = "test-site.com"; // Change to the desired value
-
-        let matching_entries = passman::get_entries_by_field(&passes, target_field, target_value);
-        for mut entry in matching_entries {
-            let vec = &entry.pass_vec;
-            let vec = &vec.clone();
-
-            let lossy_encrypted = String::from_utf8_lossy(vec.as_slice());
-            entry.pass_vec = cryptman::decrypt_file_mem_gen_key(entry.pass_vec, "", pass).unwrap();
-
-            let password = String::from_utf8_lossy(entry.pass_vec.as_slice());
-            println!(
-                "Username: {}\t encrypted:{}\t pass:{}",
-                entry.username, lossy_encrypted, password
-            );
-        }
-    }
-}
+mod tests;
