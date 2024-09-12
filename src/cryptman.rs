@@ -6,20 +6,20 @@ use chacha20poly1305::{
 };
 use log::{debug, info};
 use rand::{rngs::OsRng, RngCore};
-use sha3::{Digest, Sha3_256};
+//use sha3::{Digest, Sha3_256};
 use std::{
     fs,
     io::{prelude::*, BufReader, Write},
     str,
 };
 
-/// takes a str, hashes it using sha3_256, returns a string of the hash.
-pub fn hash_str(input: &str)-> String{
-    let mut hasher = Sha3_256::new();
-    hasher.update(input);
-    let result = hasher.finalize();
-    hex::encode(result).to_owned()
-}
+///// takes a str, hashes it using sha3_256, returns a string of the hash.
+//pub fn hash_str(input: &str)-> String{
+//    let mut hasher = Sha3_256::new();
+//    hasher.update(input);
+//    let result = hasher.finalize();
+//    hex::encode(result).to_owned()
+//}
 
 ///expects clear text passphrase as str, and the salt for the key as [u8;32]. provide an empty array for salt to generate a new one.
 pub fn pass_2_key(input: &str, mut salt: [u8; 32]) -> Result<([u8; 32], [u8; 32]), argon2::Error> {

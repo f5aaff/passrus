@@ -2,7 +2,7 @@ use crate::cryptman;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, usize};
 
-#[derive(Clone,Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Container {
     pub name: String,
     pub children: HashMap<String, Container>,
@@ -66,7 +66,6 @@ pub struct Entry {
 }
 
 impl Entry {
-
     /// returns a JSON representation of the entry as a string.
     pub fn to_json_string(&mut self) -> String {
         serde_json::to_string(self).unwrap()
@@ -81,8 +80,19 @@ impl Entry {
 
     /// populate an entry from a &str, of a  JSON serialisation of an entry. returns a Result<(),serde_json::Error>
     pub fn from_json_string(&mut self, s: &str) -> Result<(), serde_json::Error> {
-        let from_json_str: Entry = serde_json::from_str(s)?;
-        *self = from_json_str;
+        #[derive(Clone, Serialize, Deserialize)]
+        struct JsonEntry {
+            pub username: String,
+            pub password: String,
+            pub email: String,
+            pub url: String,
+        }
+        let json_in: JsonEntry = serde_json::from_str(s)?;
+        self.username = json_in.username;
+        self.pass_vec = json_in.password.as_bytes().to_vec();
+        self.email = json_in.email;
+        self.url = json_in.url;
+        self.parent = String::from("");
         Ok(())
     }
 
@@ -96,24 +106,32 @@ impl Entry {
             parent: "".to_owned(),
         }
     }
-    pub fn encrypt_password(&mut self,key:[u8;32],nonce:[u8;24],salt:[u8;32]) -> Result<(),anyhow::Error> {
-
-        let binding = cryptman::encrypt_file_mem_with_salt(self.pass_vec.clone(), "", &key, &nonce, &salt)?;
+    pub fn encrypt_password(
+        &mut self,
+        key: [u8; 32],
+        nonce: [u8; 24],
+        salt: [u8; 32],
+    ) -> Result<(), anyhow::Error> {
+        let binding =
+            cryptman::encrypt_file_mem_with_salt(self.pass_vec.clone(), "", &key, &nonce, &salt)?;
         self.pass_vec = binding;
         Ok(())
     }
 
-    pub fn decrypt_password(&mut self,password:&str) -> Result<(),anyhow::Error> {
-
-        let binding = cryptman::decrypt_file_mem_gen_key(self.pass_vec.clone(),"", password)?;
+    pub fn decrypt_password(&mut self, password: &str) -> Result<(), anyhow::Error> {
+        let binding = cryptman::decrypt_file_mem_gen_key(self.pass_vec.clone(), "", password)?;
         self.pass_vec = binding;
         Ok(())
     }
 }
 
-pub fn get_entries_by_field(container: &Container, field_name: &str, target_value: &str) -> Vec<Entry> {
+pub fn get_entries_by_field(
+    container: &Container,
+    field_name: &str,
+    target_value: &str,
+) -> Vec<Entry> {
     let mut result = Vec::new();
-
+    println!("GETTING ENTRIES\nfield_name{field_name:?}\ntarget_value{target_value:?}");
     // Check entries in the current container
     for entry in container.entries.values() {
         match field_name {
@@ -137,33 +155,36 @@ pub fn get_entries_by_field(container: &Container, field_name: &str, target_valu
                     result.push(entry.clone());
                 }
             }
-            _ => {} // Handle other fields if needed
+            _ => {
+                println!("{field_name:?}");
+            } // Handle other fields if needed
         }
     }
 
     // Recursively check subcontainers
     for child_container in container.children.values() {
-        result.extend(get_entries_by_field(child_container, field_name, target_value));
+        result.extend(get_entries_by_field(
+            child_container,
+            field_name,
+            target_value,
+        ));
     }
 
     result
 }
 
-pub fn flatten(
-    parent: &Container,
-) -> Result<HashMap<String, Entry>, anyhow::Error> {
-    let mut entries: HashMap<String, Entry> = HashMap::new();
+pub fn get_all_entries(container: &Container) -> Vec<Entry> {
 
-    // Add entries from the current container.
-    for (key, value) in &parent.entries {
-        entries.insert(key.to_owned(), value.clone());
+    let mut result = Vec::new();
+    // Print entries in the current container
+    for entry in container.entries.values() {
+        result.push(entry.clone());
     }
 
-    // Recursively process nested containers.
-    for (_, nested_container) in &parent.children {
-        let nested_entries = flatten(nested_container)?;
-        entries.extend(nested_entries);
+    // Recursively check and print entries from subcontainers
+    for child_container in container.children.values() {
+        result.extend(get_all_entries(child_container)); // Recursively print entries in the child container
     }
 
-    Ok(entries)
+    result
 }
