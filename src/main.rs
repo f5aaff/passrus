@@ -1,7 +1,4 @@
-use log::warn;
-use passman::get_all_entries;
 use rand::{rngs::OsRng, RngCore};
-use std::process::exit;
 mod cryptman;
 mod passman;
 use anyhow::{anyhow, Result};
@@ -136,6 +133,7 @@ fn handle_open(state: &mut State, arg1: &str, _: &str, _: &str) -> Result<String
         }
         Err(error) => {
             state.last_pass.clear();
+            state.current_container = state.current_container.clone();
             return Ok(format!("error opening store: {:?}", error));
         }
     };
@@ -165,12 +163,11 @@ fn handle_get(state: &mut State, _: &str, arg2: &str, arg3: &str) -> Result<Stri
         return Ok("provide a value to search by".to_string());
     }
     if arg2 == "*" && arg3 == "*" {
-        let entries =
-            match get_all(state.current_container.clone(), state.last_pass.clone()) {
-                Ok(entries) => entries,
-                Err(_) => Vec::new(),
-            };
-        return Ok(format_structs_as_table(entries))
+        let entries = match get_all(state.current_container.clone(), state.last_pass.clone()) {
+            Ok(entries) => entries,
+            Err(_) => Vec::new(),
+        };
+        return Ok(format_structs_as_table(entries));
     }
     let entries = match get_entries_by_field(
         state.current_container.clone(),
@@ -478,10 +475,25 @@ fn add_entry_to_container<'a>(
 // given a string path to the store, and a string of the password, open a passman
 // store. returns the decrypted and instantiated container struct.
 fn open_store(store: String, pass: &str) -> Result<passman::Container, anyhow::Error> {
-    let mut file = File::open(store)?;
+    println!("opening store");
+    let mut file = match File::open(store) {
+        Ok(file) => file,
+        Err(e) => {
+            let error: anyhow::Error = e.into();
+            return Err(error);
+        }
+    };
     let mut buf = Vec::new();
 
-    file.read_to_end(&mut buf)?;
+    match file.read_to_end(&mut buf) {
+        Ok(u) => u,
+        Err(e) => {
+            let error: anyhow::Error = e.into();
+            return Err(error);
+        }
+    };
+    let pt = String::from_utf8_lossy(buf.as_slice());
+    println!("{pt:?}");
     // decrypt the content, reading it from file.
     let dec_res = match cryptman::decrypt_file_mem_gen_key(buf, "", &pass) {
         Ok(res) => {
@@ -489,9 +501,10 @@ fn open_store(store: String, pass: &str) -> Result<passman::Container, anyhow::E
             res
         }
 
-        Err(error) => {
-            warn!(target:"main","error decrypting data: {error:?}");
-            exit(0);
+        Err(e) => {
+            println!("open_store: {e:?}");
+            let error: anyhow::Error = e.into();
+            return Err(error);
         }
     };
 
@@ -507,8 +520,16 @@ fn close_store(
     dest: String,
     pass: String,
 ) -> Result<(), anyhow::Error> {
-    let key_n_salt = cryptman::pass_2_key(&pass, [0u8; 32])
-        .map_err(|e| anyhow!("error generating key and salt: {:?}", e))?;
+    let key_n_salt = match cryptman::pass_2_key(&pass, [0u8; 32])
+        .map_err(|e| anyhow!("error generating key and salt: {:?}", e))
+    {
+        Ok(ks) => ks,
+        Err(e) => {
+            println!("close_store: {e:?}");
+            let err: anyhow::Error = e.into();
+            return Err(err);
+        }
+    };
 
     let key = key_n_salt.0;
     let salt = key_n_salt.1;
@@ -521,10 +542,32 @@ fn close_store(
     OsRng.fill_bytes(&mut nonce);
 
     // encrypt the file
-    let enc_res = cryptman::encrypt_file_mem_with_salt(json_arr.to_vec(), "", &key, &nonce, &salt)?;
+    let enc_res =
+        match cryptman::encrypt_file_mem_with_salt(json_arr.to_vec(), &dest, &key, &nonce, &salt) {
+            Ok(enc) => enc,
+            Err(e) => {
+                println!("close_store: {e:?}");
+                let err: anyhow::Error = e.into();
+                return Err(err);
+            }
+        };
 
-    let mut file = File::create(dest)?;
-    file.write_all(enc_res.as_slice())?;
+    let mut file = match File::create(dest) {
+        Ok(f) => f,
+        Err(e) => {
+            println!("close_store: {e:?}");
+            let err: anyhow::Error = e.into();
+            return Err(err);
+        }
+    };
+    match file.write_all(enc_res.as_slice()) {
+        Ok(o) => o,
+        Err(e) => {
+            println!("close_store: {e:?}");
+            let err: anyhow::Error = e.into();
+            return Err(err);
+        }
+    };
 
     Ok(())
 }
@@ -535,7 +578,7 @@ fn get_all(
 ) -> Result<Vec<passman::Entry>, anyhow::Error> {
     let mut entries = passman::get_all_entries(&store);
     for entry in &mut entries {
-        println!("username: {}",entry.username);
+        println!("username: {}", entry.username);
         entry.decrypt_password(&password)?;
         let password = String::from_utf8_lossy(entry.pass_vec.as_slice());
         println!("Username: {}\tpassword:{}", entry.username, password);
