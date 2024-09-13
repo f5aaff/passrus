@@ -9,14 +9,14 @@ use std::{fs, io::Write, str};
 
 ///expects clear text passphrase as str, and the salt for the key as [u8;32]. provide an empty array for salt to generate a new one.
 pub fn pass_2_key(input: &str, mut salt: [u8; 32]) -> Result<([u8; 32], [u8; 32]), anyhow::Error> {
-    println!("Attempting to generate key...");
+    log::debug!("Attempting to generate key...");
 
     // Generate a salt if an empty one is provided
     if salt.iter().all(|&x| x == 0) {
-        println!("Empty salt provided, generating new salt.");
+        log::debug!("Empty salt provided, generating new salt.");
         OsRng.fill_bytes(&mut salt);
     } else {
-        println!("Using provided salt.");
+        log::debug!("Using provided salt.");
     }
 
     let mut key = [0u8; 32]; // Buffer for the generated key
@@ -24,11 +24,11 @@ pub fn pass_2_key(input: &str, mut salt: [u8; 32]) -> Result<([u8; 32], [u8; 32]
     // Hash the password with Argon2 to generate the key
     match Argon2::default().hash_password_into(input.as_bytes(), &salt, &mut key) {
         Ok(_) => {
-            println!("Successfully generated key.");
+            log::debug!("Successfully generated key.");
             Ok((key, salt))
         }
         Err(err) => {
-            println!("Error generating key: {:?}", err);
+            log::debug!("Error generating key: {:?}", err);
             Err(anyhow!("Key generation failed: {:?}", err))
         }
     }
@@ -42,27 +42,27 @@ pub fn encrypt_file_mem_with_salt(
     nonce: &[u8; 24],
     salt: &[u8; 32],
 ) -> Result<Vec<u8>, anyhow::Error> {
-    println!("Attempting to encrypt data...");
+    log::debug!("Attempting to encrypt data...");
 
     // Create a cipher instance using the provided key
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
-    println!("Cipher generated from key.");
+    log::debug!("Cipher generated from key.");
 
     // Encrypt the file data
     let encrypted_file = match cipher.encrypt(GenericArray::from_slice(nonce), file_data.as_ref()) {
         Ok(encrypted_data) => {
-            println!("Data encrypted successfully.");
+            log::debug!("Data encrypted successfully.");
             encrypted_data
         }
         Err(err) => {
-            println!("Error encrypting data: {:?}", err);
+            log::debug!("Error encrypting data: {:?}", err);
             return Err(anyhow!("Encrypting small file: {:?}", err));
         }
     };
 
     // Optionally write the encrypted file along with nonce and salt to the disk
     if !dist.is_empty() {
-        println!(
+        log::debug!(
             "File path provided: attempting to write encrypted content to {}",
             dist
         );
@@ -75,7 +75,7 @@ pub fn encrypt_file_mem_with_salt(
         f.write_all(nonce)?;
         f.write_all(salt)?;
 
-        println!("Encrypted content written to file successfully.");
+        log::debug!("Encrypted content written to file successfully.");
     }
 
     // Append nonce and salt to the in-memory encrypted file
@@ -83,7 +83,7 @@ pub fn encrypt_file_mem_with_salt(
     final_file.extend_from_slice(nonce);
     final_file.extend_from_slice(salt);
 
-    println!("Nonce and salt appended to encrypted content in memory.");
+    log::debug!("Nonce and salt appended to encrypted content in memory.");
 
     Ok(final_file)
 }
@@ -134,8 +134,8 @@ pub fn decrypt_file_mem_gen_key(
     let nonce = GenericArray::<u8, chacha20poly1305::aead::consts::U24>::from_slice(nonce_bytes);
 
     // Print debugging information to track the values of salt and nonce
-    println!("Salt: {:?}", String::from_utf8_lossy(salt));
-    println!("Nonce: {:?}", String::from_utf8_lossy(nonce_bytes));
+    log::debug!("Salt: {:?}", String::from_utf8_lossy(salt));
+    log::debug!("Nonce: {:?}", String::from_utf8_lossy(nonce_bytes));
 
     // Generate the key from the password and salt
     let key = match pass_2_key(pass, *salt) {
@@ -147,17 +147,17 @@ pub fn decrypt_file_mem_gen_key(
 
     // Print debugging information for the generated key
     let byte_slice: &[u8] = &key;
-    println!("Generated key: {:?}", String::from_utf8_lossy(byte_slice));
+    log::debug!("Generated key: {:?}", String::from_utf8_lossy(byte_slice));
 
     // Create a cipher instance using the generated key
     let cipher = XChaCha20Poly1305::new(Key::from_slice(&key));
-    println!("Cipher created.");
+    log::debug!("Cipher created.");
 
     // Extract the encrypted content (excluding nonce and salt)
     let encrypted_content = &data_arr[..nonce_start];
 
     // Print debugging information for the encrypted content
-    println!("Encrypted content: {:?}", String::from_utf8_lossy(encrypted_content));
+    log::debug!("Encrypted content: {:?}", String::from_utf8_lossy(encrypted_content));
 
     if encrypted_content.is_empty() {
         return Err(anyhow!("Encrypted content is empty"));
@@ -168,16 +168,16 @@ pub fn decrypt_file_mem_gen_key(
         Ok(decrypted_data) => decrypted_data,
         Err(err) => {
             // Print debugging information for the decryption error
-            println!("Decryption error: {:?}", err);
+            log::debug!("Decryption error: {:?}", err);
             return Err(anyhow!("Decrypting small file: {}", err));
         }
     };
 
-    println!("Decrypted content successfully.");
-    println!("decrypted Content: {:?}",String::from_utf8_lossy(decrypted_file.as_slice()));
+    log::debug!("Decrypted content successfully.");
+    log::debug!("decrypted Content: {:?}",String::from_utf8_lossy(decrypted_file.as_slice()));
     // If a path is provided, write the decrypted content to the destination file
     if !dist.is_empty() {
-        println!("File path detected, writing decrypted content to destination file...");
+        log::debug!("File path detected, writing decrypted content to destination file...");
         fs::write(&dist, &decrypted_file)?;
     }
 

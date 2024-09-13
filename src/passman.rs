@@ -131,7 +131,6 @@ pub fn get_entries_by_field(
     target_value: &str,
 ) -> Vec<Entry> {
     let mut result = Vec::new();
-    println!("GETTING ENTRIES\nfield_name{field_name:?}\ntarget_value{target_value:?}");
     // Check entries in the current container
     for entry in container.entries.values() {
         match field_name {
@@ -156,7 +155,7 @@ pub fn get_entries_by_field(
                 }
             }
             _ => {
-                println!("{field_name:?}");
+                log::debug!("{field_name:?}");
             } // Handle other fields if needed
         }
     }

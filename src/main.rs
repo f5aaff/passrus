@@ -1,3 +1,4 @@
+use passman::get_all_entries;
 use rand::{rngs::OsRng, RngCore};
 mod cryptman;
 mod passman;
@@ -38,7 +39,7 @@ fn handle_client(mut stream: UnixStream, state: &State) {
             }
         }
         Ok(_) => {
-            // No data read (EOF or similar), you might want to handle this case
+            // No data read (EOF or similar)
             eprintln!("No data read from the client");
         }
         Err(e) => {
@@ -120,33 +121,44 @@ fn handle_open(state: &mut State, arg1: &str, _: &str, _: &str) -> Result<String
         return Ok("password required. Container is locked.".to_string());
     }
 
-    let password = if state.last_pass.is_empty() {
-        arg1.to_string()
-    } else {
-        state.last_pass.clone()
+    if state.last_pass.is_empty() {
+        state.last_pass = arg1.to_string();
     };
 
-    state.current_container = match open_store(state.store_path.clone(), &password) {
-        Ok(container) => {
-            state.last_pass = password;
-            container
-        }
+    let path = Cow::Borrowed(&state.store_path);
+
+    match open_store(
+        &mut state.current_container,
+        path.to_string(),
+        &state.last_pass,
+    ) {
+        Ok(_) => Ok("Password accepted, pass store opened.".to_string()),
         Err(error) => {
             state.last_pass.clear();
-            state.current_container = state.current_container.clone();
-            return Ok(format!("error opening store: {:?}", error));
+            Ok(format!("error opening store: {:?}", error))
         }
-    };
-
-    Ok("Password accepted, pass store opened.".to_string())
+    }
 }
 
 // commandHandler for closing the password store
-fn handle_close(state: &mut State, _: &str, _: &str, _: &str) -> Result<String, anyhow::Error> {
+fn handle_close(
+    state: &mut State,
+    pass_in: &str,
+    _: &str,
+    _: &str,
+) -> Result<String, anyhow::Error> {
+    let password: String;
+    if pass_in.is_empty() {
+        println!("password empty, using last password");
+        password = state.last_pass.clone();
+    } else {
+        println!("password not empty");
+        password = String::from(pass_in);
+    }
     match close_store(
         state.current_container.clone(),
         state.store_path.clone(),
-        state.last_pass.clone(),
+        password,
     ) {
         Ok(_) => Ok("store closed successfully.".to_string()),
         Err(error) => Ok(format!("error closing store: {:?}", error)),
@@ -209,11 +221,10 @@ fn handle_new(
             if arg2.is_empty() {
                 return Ok("creating a child-container requires a . seperated path for the container(s) as the 2nd arg\n e.g \"subcontainer.subsubcontainer\"".to_string());
             }
-            state.current_container = match create_child(&mut state.current_container, arg2) {
-                Ok(container) => container.clone(),
+            match create_child(&mut state.current_container, arg2) {
+                Ok(_) => Ok(format!("{arg2:?} created.")),
                 Err(e) => return Ok(format!("error creating child-container {arg2:?}: {e:?}")),
-            };
-            Ok(format!("{arg2:?} created."))
+            }
         }
         "entry" => {
             if arg2.is_empty() {
@@ -250,13 +261,15 @@ fn handle_new(
 
                     // encrypt the password
                     entry.encrypt_password(key, nonce, salt)?;
-
-                    state.current_container =
-                        match add_entry_to_container(&mut state.current_container, arg2, entry) {
-                            Ok(container) => container.clone(),
-                            Err(e) => return Ok(format!("error adding entry {arg2:?}: {e:?}")),
-                        };
-                    Ok(format!("{arg2:?} created."))
+                    match add_entry_to_container(&mut state.current_container, arg2, entry) {
+                        Ok(_) => {
+                            let entries = get_all_entries(&state.current_container);
+                            let table = format_structs_as_table(entries);
+                            println!("{table:?}");
+                            Ok(format!("{arg2:?} created."))
+                        }
+                        Err(e) => return Ok(format!("error adding entry {arg2:?}: {e:?}")),
+                    }
                 }
                 Err(e) => return Ok(format!("error creating {arg2:?} {e:?}")),
             }
@@ -474,9 +487,13 @@ fn add_entry_to_container<'a>(
 
 // given a string path to the store, and a string of the password, open a passman
 // store. returns the decrypted and instantiated container struct.
-fn open_store(store: String, pass: &str) -> Result<passman::Container, anyhow::Error> {
+fn open_store(
+    store: &mut passman::Container,
+    store_path: String,
+    pass: &str,
+) -> Result<(), anyhow::Error> {
     println!("opening store");
-    let mut file = match File::open(store) {
+    let mut file = match File::open(store_path) {
         Ok(file) => file,
         Err(e) => {
             let error: anyhow::Error = e.into();
@@ -502,15 +519,14 @@ fn open_store(store: String, pass: &str) -> Result<passman::Container, anyhow::E
         }
 
         Err(e) => {
-            println!("open_store: {e:?}");
+            println!("open_store_path: {e:?}");
             let error: anyhow::Error = e.into();
             return Err(error);
         }
     };
 
-    let mut passes: passman::Container = passman::Container::new("");
-    passes.from_json_arr(dec_res.as_slice())?;
-    Ok(passes)
+    store.from_json_arr(dec_res.as_slice())?;
+    Ok(())
 }
 
 // given a passman container, a destination string, and a password with which to encrypt it,
