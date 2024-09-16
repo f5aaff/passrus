@@ -211,7 +211,8 @@ pub fn load_and_decrypt_container(
             return Err(e);
         }
     };
-
+    let enc_string = String::from_utf8_lossy(enc_data.as_slice());
+    println!("file read{enc_string:?}");
     let dec_res = match cryptman::decrypt_file_mem_gen_key(enc_data, "", password) {
         Ok(res) => res,
         Err(error) => {
@@ -220,6 +221,8 @@ pub fn load_and_decrypt_container(
             return Err(e);
         }
     };
+    let dec_string = String::from_utf8_lossy(dec_res.as_slice());
+    println!("dec_res:{dec_string:?}");
 
     match container.from_json_arr(dec_res.as_slice()) {
         Ok(_) => Ok(()),

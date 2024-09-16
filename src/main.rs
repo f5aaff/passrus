@@ -167,6 +167,13 @@ fn handle_close(
 
 // commandHandler for retrieving elements from the password store
 fn handle_get(state: &mut State, _: &str, arg2: &str, arg3: &str) -> Result<String, anyhow::Error> {
+    if arg2 == "all" || arg2 == "*" {
+        let entries = match get_all(state.current_container.clone(), state.last_pass.clone()) {
+            Ok(entries) => entries,
+            Err(_) => Vec::new(),
+        };
+        return Ok(format_structs_as_table(entries));
+    }
     if arg2.is_empty() {
         return Ok("provide a target field".to_string());
     }
@@ -174,13 +181,7 @@ fn handle_get(state: &mut State, _: &str, arg2: &str, arg3: &str) -> Result<Stri
     if arg3.is_empty() {
         return Ok("provide a value to search by".to_string());
     }
-    if arg2 == "*" && arg3 == "*" {
-        let entries = match get_all(state.current_container.clone(), state.last_pass.clone()) {
-            Ok(entries) => entries,
-            Err(_) => Vec::new(),
-        };
-        return Ok(format_structs_as_table(entries));
-    }
+
     let entries = match get_entries_by_field(
         state.current_container.clone(),
         arg2.to_string(),
@@ -193,8 +194,7 @@ fn handle_get(state: &mut State, _: &str, arg2: &str, arg3: &str) -> Result<Stri
 
     Ok(format_structs_as_table(entries))
 }
-
-// commandHandler for creating a password store
+// Command handler for creating a password store
 fn handle_new(
     state: &mut State,
     arg1: &str,
@@ -202,80 +202,85 @@ fn handle_new(
     arg3: &str,
 ) -> Result<String, anyhow::Error> {
     if arg1.is_empty() {
-        return Ok("new requires an argument (e.g store,container,entry)".to_string());
+        return Ok("new requires an argument (e.g store, container, entry)".to_string());
     }
 
+    // Match on the first argument and call the respective sub-command handler
     match arg1 {
-        "store" => {
-            if arg2.is_empty() {
-                return Ok("creating a store requires a password as the 2nd arg".to_string());
-            }
-
-            let path = Cow::Borrowed(&state.store_path);
-
-            state.current_container =
-                create_store(state.current_container.clone(), path.to_string(), arg2)?;
-            Ok(format!("store created at: {}", path.to_string()))
-        }
-        "child" => {
-            if arg2.is_empty() {
-                return Ok("creating a child-container requires a . seperated path for the container(s) as the 2nd arg\n e.g \"subcontainer.subsubcontainer\"".to_string());
-            }
-            match create_child(&mut state.current_container, arg2) {
-                Ok(_) => Ok(format!("{arg2:?} created.")),
-                Err(e) => return Ok(format!("error creating child-container {arg2:?}: {e:?}")),
-            }
-        }
-        "entry" => {
-            if arg2.is_empty() {
-                return Ok("creating an entry requires a . seperated path for the entry as the 2nd arg\n e.g \"subcontainer.subsubcontainer.entry\"".to_string());
-            }
-            if arg3.is_empty() {
-                return Ok(String::from(
-                    "creating an entry requires a JSON string of the entry to be created, e.g\n
-                          \"{\n\t
-                              \t\"username\":\"john_smith\",\n
-                              \t\"password\":\"somePassword\",\n
-                              \t\"email\":\"john@smith.com\",\n
-                              \t\"url\":\"http://blahblahblah.com\"\n
-                          }\n",
-                ));
-            }
-            let input = arg3.replace(r#"\""#, r#"""#);
-            println!("{}", input);
-            let mut entry = passman::Entry::new("", Vec::new(), "", "");
-            match entry.from_json_string(&input) {
-                Ok(()) => {
-                    let key_n_salt = match cryptman::pass_2_key(&state.last_pass, [0u8; 32]) {
-                        Ok(res) => res,
-
-                        Err(error) => {
-                            return Ok(format! {"error encrypting password: {error:?}"});
-                        }
-                    };
-
-                    // generate a key and salt from the pass used to open the store.
-                    let mut nonce = [0u8; 24];
-                    OsRng.fill_bytes(&mut nonce);
-                    let (key, salt) = key_n_salt;
-
-                    // encrypt the password
-                    entry.encrypt_password(key, nonce, salt)?;
-                    match add_entry_to_container(&mut state.current_container, arg2, entry) {
-                        Ok(_) => {
-                            let entries = get_all_entries(&state.current_container);
-                            let table = format_structs_as_table(entries);
-                            println!("{table:?}");
-                            Ok(format!("{arg2:?} created."))
-                        }
-                        Err(e) => return Ok(format!("error adding entry {arg2:?}: {e:?}")),
-                    }
-                }
-                Err(e) => return Ok(format!("error creating {arg2:?} {e:?}")),
-            }
-        }
+        "store" => handle_new_store(state, arg2),
+        "child" => handle_new_child(state, arg2),
+        "entry" => handle_new_entry(state, arg2, arg3),
         _ => Ok(format!("{arg1:?} not recognised.")),
     }
+}
+
+// Handler for the 'new store' sub-command
+fn handle_new_store(state: &mut State, password: &str) -> Result<String, anyhow::Error> {
+    if password.is_empty() {
+        return Ok("creating a store requires a password as the 2nd arg".to_string());
+    }
+
+    let path = Cow::Borrowed(&state.store_path);
+    state.current_container =
+        create_store(state.current_container.clone(), path.to_string(), password)?;
+
+    Ok(format!("Store created at: {}", path.to_string()))
+}
+
+// Handler for the 'new child' sub-command
+fn handle_new_child(state: &mut State, container_path: &str) -> Result<String, anyhow::Error> {
+    if container_path.is_empty() {
+        return Ok("creating a child-container requires a . separated path as the 2nd arg (e.g. 'subcontainer.subsubcontainer')".to_string());
+    }
+
+    match create_child(&mut state.current_container, container_path) {
+        Ok(_) => Ok(format!("{container_path:?} created.")),
+        Err(e) => Ok(format!(
+            "Error creating child-container {container_path:?}: {e:?}"
+        )),
+    }
+}
+
+// Handler for the 'new entry' sub-command
+fn handle_new_entry(
+    state: &mut State,
+    entry_path: &str,
+    entry_json: &str,
+) -> Result<String, anyhow::Error> {
+    if entry_path.is_empty() {
+        return Ok("Creating an entry requires a . separated path as the 2nd arg (e.g. 'subcontainer.subsubcontainer.entry')".to_string());
+    }
+    if entry_json.is_empty() {
+        return Ok("Creating an entry requires a JSON string as the 3rd arg.".to_string());
+    }
+
+    let input = entry_json.replace(r#"\""#, r#"""#);
+    println!("Entry JSON received: {}", input);
+
+    let mut entry = passman::Entry::new("", Vec::new(), "", "");
+    entry.from_json_string(&input)?;
+
+    let key_n_salt = cryptman::pass_2_key(&state.last_pass, [0u8; 32])?;
+    let mut nonce = [0u8; 24];
+    OsRng.fill_bytes(&mut nonce);
+    let (key, salt) = key_n_salt;
+
+    entry.encrypt_password(key, nonce, salt)?;
+
+    match add_entry_to_container(&mut state.current_container, entry_path, entry) {
+        Ok(_) => {
+            let entries = get_all_entries(&state.current_container);
+            let table = format_structs_as_table(entries);
+            println!("{table:?}");
+
+            return Ok(format!("{entry_path:?} created."));
+        },
+        Err(e) => {
+            println!("it done fucked up: {e:?}");
+            let err:anyhow::Error = e.into();
+            return Err(err);
+        }
+    };
 }
 
 // function to take the input from the socket message, process the arguments, then create the
@@ -511,15 +516,15 @@ fn close_store(
     dest: String,
     pass: String,
 ) -> Result<(), anyhow::Error> {
-    println!("encrypting and saving store") ;
+    println!("encrypting and saving store");
     match passman::encrypt_and_save_container(store, &pass, &dest) {
-    Ok(_) =>{
-        return Ok(());
-    }
-    Err(e) => {
-        let err: anyhow::Error = e.into();
-        return Err(err);
-    }
+        Ok(_) => {
+            return Ok(());
+        }
+        Err(e) => {
+            let err: anyhow::Error = e.into();
+            return Err(err);
+        }
     };
 }
 
