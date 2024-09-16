@@ -2,6 +2,16 @@ use crate::cryptman;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, usize};
 
+use rand::{rngs::OsRng, RngCore};
+use std::fs::{
+    //self,
+    File,
+};
+use std::io::{
+    //Read,
+    Write,
+};
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Container {
     pub name: String,
@@ -173,7 +183,6 @@ pub fn get_entries_by_field(
 }
 
 pub fn get_all_entries(container: &Container) -> Vec<Entry> {
-
     let mut result = Vec::new();
     // Print entries in the current container
     for entry in container.entries.values() {
@@ -186,4 +195,91 @@ pub fn get_all_entries(container: &Container) -> Vec<Entry> {
     }
 
     result
+}
+
+// Function to load and decrypt a container from an encrypted file
+pub fn load_and_decrypt_container(
+    container: &mut Container,
+    password: &str,
+    file_path: &str,
+) -> Result<(), anyhow::Error> {
+    let enc_data = match std::fs::read(file_path) {
+        Ok(data) => data,
+        Err(error) => {
+            println!("Failed to read encrypted file: {error:?}");
+            let e: anyhow::Error = error.into();
+            return Err(e);
+        }
+    };
+
+    let dec_res = match cryptman::decrypt_file_mem_gen_key(enc_data, "", password) {
+        Ok(res) => res,
+        Err(error) => {
+            println!("Error decrypting data: {error:?}");
+            let e: anyhow::Error = error.into();
+            return Err(e);
+        }
+    };
+
+    match container.from_json_arr(dec_res.as_slice()) {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            println!("Failed to deserialize container: {error:?}");
+            let e: anyhow::Error = error.into();
+            return Err(e);
+        }
+    }
+}
+
+// Function to encrypt and save a container to a file
+pub fn encrypt_and_save_container(
+    container: &mut Container,
+    password: &str,
+    file_path: &str,
+) -> Result<(), anyhow::Error> {
+    let json_data = container.to_json_string();
+    let json_arr = json_data.as_bytes();
+
+    let key_n_salt = match cryptman::pass_2_key(password, [0u8; 32]) {
+        Ok(res) => res,
+        Err(error) => {
+            println!("Error generating key and salt: {error:?}");
+            let e: anyhow::Error = error.into();
+            return Err(e);
+        }
+    };
+
+    let key = key_n_salt.0;
+    let salt = key_n_salt.1;
+
+    let mut nonce = [0u8; 24];
+    OsRng.fill_bytes(&mut nonce);
+
+    let enc_res =
+        match cryptman::encrypt_file_mem_with_salt(json_arr.to_vec(), "", &key, &nonce, &salt) {
+            Ok(res) => res,
+            Err(error) => {
+                println!("Error encrypting data: {error:?}");
+                let e: anyhow::Error = error.into();
+                return Err(e);
+            }
+        };
+
+    match File::create(file_path) {
+        Ok(mut file) => {
+            if let Err(error) = file.write_all(&enc_res) {
+                println!("Failed to write encrypted file: {error:?}");
+                let e: anyhow::Error = error.into();
+                return Err(e);
+            }
+        }
+        Err(error) => {
+            println!("Failed to create file: {error:?}");
+            let e: anyhow::Error = error.into();
+            return Err(e);
+        }
+    }
+
+    println!("Container encrypted and saved successfully.");
+    Ok(())
 }

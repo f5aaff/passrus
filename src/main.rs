@@ -156,7 +156,7 @@ fn handle_close(
         password = String::from(pass_in);
     }
     match close_store(
-        state.current_container.clone(),
+        &mut state.current_container,
         state.store_path.clone(),
         password,
     ) {
@@ -493,99 +493,34 @@ fn open_store(
     pass: &str,
 ) -> Result<(), anyhow::Error> {
     println!("opening store");
-    let mut file = match File::open(store_path) {
-        Ok(file) => file,
+    match passman::load_and_decrypt_container(store, pass, &store_path) {
+        Ok(_) => {
+            return Ok(());
+        }
         Err(e) => {
-            let error: anyhow::Error = e.into();
-            return Err(error);
+            let err: anyhow::Error = e.into();
+            return Err(err);
         }
     };
-    let mut buf = Vec::new();
-
-    match file.read_to_end(&mut buf) {
-        Ok(u) => u,
-        Err(e) => {
-            let error: anyhow::Error = e.into();
-            return Err(error);
-        }
-    };
-    let pt = String::from_utf8_lossy(buf.as_slice());
-    println!("{pt:?}");
-    // decrypt the content, reading it from file.
-    let dec_res = match cryptman::decrypt_file_mem_gen_key(buf, "", &pass) {
-        Ok(res) => {
-            println!("grabbed salt&nonce from file, decrypted successfully");
-            res
-        }
-
-        Err(e) => {
-            println!("open_store_path: {e:?}");
-            let error: anyhow::Error = e.into();
-            return Err(error);
-        }
-    };
-
-    store.from_json_arr(dec_res.as_slice())?;
-    Ok(())
 }
 
 // given a passman container, a destination string, and a password with which to encrypt it,
 // encrypt and write to file the container to file.
 fn close_store(
-    mut store: passman::Container,
+    store: &mut passman::Container,
     dest: String,
     pass: String,
 ) -> Result<(), anyhow::Error> {
-    let key_n_salt = match cryptman::pass_2_key(&pass, [0u8; 32])
-        .map_err(|e| anyhow!("error generating key and salt: {:?}", e))
-    {
-        Ok(ks) => ks,
-        Err(e) => {
-            println!("close_store: {e:?}");
-            let err: anyhow::Error = e.into();
-            return Err(err);
-        }
+    println!("encrypting and saving store") ;
+    match passman::encrypt_and_save_container(store, &pass, &dest) {
+    Ok(_) =>{
+        return Ok(());
+    }
+    Err(e) => {
+        let err: anyhow::Error = e.into();
+        return Err(err);
+    }
     };
-
-    let key = key_n_salt.0;
-    let salt = key_n_salt.1;
-
-    let binding = store.to_json_string();
-    let json_arr = binding.as_bytes();
-
-    // generate a nonce to use, fill with random bytes with OsRng.
-    let mut nonce = [0u8; 24];
-    OsRng.fill_bytes(&mut nonce);
-
-    // encrypt the file
-    let enc_res =
-        match cryptman::encrypt_file_mem_with_salt(json_arr.to_vec(), &dest, &key, &nonce, &salt) {
-            Ok(enc) => enc,
-            Err(e) => {
-                println!("close_store: {e:?}");
-                let err: anyhow::Error = e.into();
-                return Err(err);
-            }
-        };
-
-    let mut file = match File::create(dest) {
-        Ok(f) => f,
-        Err(e) => {
-            println!("close_store: {e:?}");
-            let err: anyhow::Error = e.into();
-            return Err(err);
-        }
-    };
-    match file.write_all(enc_res.as_slice()) {
-        Ok(o) => o,
-        Err(e) => {
-            println!("close_store: {e:?}");
-            let err: anyhow::Error = e.into();
-            return Err(err);
-        }
-    };
-
-    Ok(())
 }
 
 fn get_all(
