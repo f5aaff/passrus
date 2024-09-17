@@ -241,48 +241,6 @@ fn handle_new_child(state: &mut State, container_path: &str) -> Result<String, a
     }
 }
 
-// Handler for the 'new entry' sub-command
-fn handle_new_entry(
-    state: &mut State,
-    entry_path: &str,
-    entry_json: &str,
-) -> Result<String, anyhow::Error> {
-    if entry_path.is_empty() {
-        return Ok("Creating an entry requires a . separated path as the 2nd arg (e.g. 'subcontainer.subsubcontainer.entry')".to_string());
-    }
-    if entry_json.is_empty() {
-        return Ok("Creating an entry requires a JSON string as the 3rd arg.".to_string());
-    }
-
-    let input = entry_json.replace(r#"\""#, r#"""#);
-    println!("Entry JSON received: {}", input);
-
-    let mut entry = passman::Entry::new("", Vec::new(), "", "");
-    entry.from_json_string(&input)?;
-
-    let key_n_salt = cryptman::pass_2_key(&state.last_pass, [0u8; 32])?;
-    let mut nonce = [0u8; 24];
-    OsRng.fill_bytes(&mut nonce);
-    let (key, salt) = key_n_salt;
-
-    entry.encrypt_password(key, nonce, salt)?;
-
-    match add_entry_to_container(&mut state.current_container, entry_path, entry) {
-        Ok(_) => {
-            let entries = get_all_entries(&state.current_container);
-            let table = format_structs_as_table(entries);
-            println!("{table:?}");
-
-            return Ok(format!("{entry_path:?} created."));
-        },
-        Err(e) => {
-            println!("it done fucked up: {e:?}");
-            let err:anyhow::Error = e.into();
-            return Err(err);
-        }
-    };
-}
-
 // function to take the input from the socket message, process the arguments, then create the
 // response.
 fn input_from_client(input: String, mut state: State) -> Result<String, anyhow::Error> {
@@ -442,6 +400,93 @@ fn create_child<'a>(
     add_to_container(current_store, &parts)
 }
 
+// Handler for the 'new entry' sub-command
+fn handle_new_entry(
+    state: &mut State,
+    entry_path: &str,
+    entry_json: &str,
+) -> Result<String, anyhow::Error> {
+    if entry_path.is_empty() {
+        return Ok("Creating an entry requires a . separated path as the 2nd arg (e.g. 'subcontainer.subsubcontainer.entry')".to_string());
+    }
+    if entry_json.is_empty() {
+        return Ok("Creating an entry requires a JSON string as the 3rd arg.".to_string());
+    }
+
+    let input = entry_json.replace(r#"\""#, r#"""#);
+    println!("Entry JSON received: {}", input);
+
+    let mut entry = passman::Entry::new("", Vec::new(), "", "");
+    entry.from_json_string(&input)?;
+
+    let key_n_salt = cryptman::pass_2_key(&state.last_pass, [0u8; 32])?;
+    let mut nonce = [0u8; 24];
+    OsRng.fill_bytes(&mut nonce);
+    let (key, salt) = key_n_salt;
+
+    entry.encrypt_password(key, nonce, salt)?;
+
+    match add_entry_to_container(&mut state.current_container, entry_path, entry) {
+        Ok(_) => {
+            let entries = get_all_entries(&state.current_container);
+            let table = format_structs_as_table(entries.clone());
+
+            // Test to log how many entries exist after adding the new one
+            println!("Current entries in container: {}", entries.len());
+
+            return Ok(format!("{entry_path:?} created.\n{table:?}"));
+        }
+        Err(e) => {
+            println!("Error adding entry to container: {e:?}");
+            return Err(e);
+        }
+    }
+}
+
+//fn handle_new_entry(
+//    state: &mut State,
+//    entry_path: &str,
+//    entry_json: &str,
+//) -> Result<String, anyhow::Error> {
+//    if entry_path.is_empty() {
+//        return Ok("Creating an entry requires a . separated path as the 2nd arg (e.g. 'subcontainer.subsubcontainer.entry')".to_string());
+//    }
+//    if entry_json.is_empty() {
+//        return Ok("Creating an entry requires a JSON string as the 3rd arg.".to_string());
+//    }
+//
+//    let input = entry_json.replace(r#"\""#, r#"""#);
+//    println!("Entry JSON received: {}", input);
+//
+//    let mut entry = passman::Entry::new("", Vec::new(), "", "");
+//    entry.from_json_string(&input)?;
+//
+//    let key_n_salt = cryptman::pass_2_key(&state.last_pass, [0u8; 32])?;
+//    let mut nonce = [0u8; 24];
+//    OsRng.fill_bytes(&mut nonce);
+//    let (key, salt) = key_n_salt;
+//
+//    entry.encrypt_password(key, nonce, salt)?;
+//
+//    match add_entry_to_container(&mut state.current_container, entry_path, entry) {
+//        Ok(_) => {
+//            let entries = get_all_entries(&state.current_container);
+//            let table = format_structs_as_table(entries);
+//            println!("{table:?}");
+//
+//            return Ok(format!("{entry_path:?} created.\n{table:?}"));
+//        }
+//        Err(e) => {
+//            println!("error adding entry to container: {e:?}");
+//            let err: anyhow::Error = e.into();
+//            return Err(err);
+//        }
+//    };
+//}
+
+// add entries to a container in place, expects a mutable reference to the container,
+// the path of the entry to be added,
+// and the entry to add.
 fn add_entry_to_container<'a>(
     current_store: &'a mut passman::Container,
     path: &str,
@@ -450,45 +495,84 @@ fn add_entry_to_container<'a>(
     // Split the path by '.' to get the container hierarchy
     let parts: Vec<&str> = path.split('.').collect();
 
-    // The path should have at least one part (for the container)
     if parts.is_empty() {
-        return Err(anyhow::anyhow!(
-            "Invalid path: must contain at least one part"
-        ));
+        return Err(anyhow::anyhow!("Invalid path: must contain at least one part"));
     }
 
-    // Helper function to recursively traverse and create containers
-    fn add_to_container<'a>(
-        container: &'a mut passman::Container,
-        parts: &[&str],
-    ) -> Result<&'a mut passman::Container, anyhow::Error> {
-        if parts.is_empty() {
-            return Ok(container);
+    // Traverse the path, creating containers if necessary
+    let mut target_container: *mut passman::Container = current_store;
+
+    for part in parts.iter() {
+        unsafe {
+            // Check if the child exists, otherwise create it
+            if !(*target_container).children.contains_key(*part) {
+                (*target_container).add_child(passman::Container::new(part));
+            }
+
+            // Move to the child container via raw pointer dereference
+            target_container = (*target_container)
+                .children
+                .get_mut(*part)
+                .ok_or_else(|| anyhow::anyhow!("Failed to retrieve child container"))?;
         }
-
-        let part = parts[0];
-
-        // Check if the current part exists in children, otherwise create a new container
-        if !container.children.contains_key(part) {
-            container.add_child(passman::Container::new(part));
-        }
-
-        // Recursively move to the next part of the path
-        let child_container = container.children.get_mut(part).ok_or_else(|| {
-            anyhow::anyhow!("Failed to get or create child container for part: {}", part)
-        })?;
-
-        add_to_container(child_container, &parts[1..])
     }
 
-    // Traverse the path to the last container
-    let target_container = add_to_container(current_store, &parts)?;
+    unsafe {
+        // Now add the entry to the resolved target container
+        (*target_container).add_entry(entry);
+    }
 
-    // Add the entry to the last container
-    target_container.add_entry(entry);
-
-    Ok(target_container)
+    Ok(current_store)
 }
+
+
+//fn add_entry_to_container<'a>(
+//    current_store: &'a mut passman::Container,
+//    path: &str,
+//    entry: passman::Entry,
+//) -> Result<&'a mut passman::Container, anyhow::Error> {
+//    // Split the path by '.' to get the container hierarchy
+//    let parts: Vec<&str> = path.split('.').collect();
+//
+//    // The path should have at least one part (for the container)
+//    if parts.is_empty() {
+//        return Err(anyhow::anyhow!(
+//            "Invalid path: must contain at least one part"
+//        ));
+//    }
+//
+//    // Helper function to recursively traverse and create containers
+//    fn add_to_container<'a>(
+//        container: &'a mut passman::Container,
+//        parts: &[&str],
+//    ) -> Result<&'a mut passman::Container, anyhow::Error> {
+//        if parts.is_empty() {
+//            return Ok(container);
+//        }
+//
+//        let part = parts[0];
+//
+//        // Check if the current part exists in children, otherwise create a new container
+//        if !container.children.contains_key(part) {
+//            container.add_child(passman::Container::new(part));
+//        }
+//
+//        // Recursively move to the next part of the path
+//        let child_container = container.children.get_mut(part).ok_or_else(|| {
+//            anyhow::anyhow!("Failed to get or create child container for part: {}", part)
+//        })?;
+//
+//        add_to_container(child_container, &parts[1..])
+//    }
+//
+//    // Traverse the path to the last container
+//    let target_container = add_to_container(current_store, &parts)?;
+//
+//    // Add the entry to the last container
+//    target_container.add_entry(entry);
+//
+//    Ok(target_container)
+//}
 
 // given a string path to the store, and a string of the password, open a passman
 // store. returns the decrypted and instantiated container struct.
