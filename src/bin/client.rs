@@ -21,7 +21,7 @@ fn main() -> std::io::Result<()> {
 
     // Print the response from the server
     let echoed_message = String::from_utf8_lossy(&buffer[..n]);
-    println!("passrus: {}", echoed_message);
+    println!("{}", echoed_message);
 
     Ok(())
 }

@@ -44,7 +44,7 @@ impl Container {
         *self = from_json;
         Ok(())
     }
-
+    #[allow(dead_code)]
     /// populate a container from a &str, of a  JSON serialisation of a container. returns a Result<(),serde_json::Error>
     pub fn from_json_string(&mut self, s: &str) -> Result<(), serde_json::Error> {
         let from_json_str: Container = serde_json::from_str(s)?;
@@ -53,20 +53,24 @@ impl Container {
     }
 
     // instantiate a new container, expects a name. Returns a container.
-    pub fn new(name: &str) -> Self {
-        let parent = "none";
+    pub fn new(name: &str, parent: Option<&str>) -> Self {
+        let container_parent: &str;
+        match parent {
+            Some(n) => container_parent = n,
+            None => container_parent = "none",
+        };
         let children: HashMap<String, Container> = HashMap::new();
         let entries: HashMap<String, Entry> = HashMap::new();
         Container {
             name: name.to_owned(),
-            parent: parent.to_owned(),
+            parent: container_parent.to_owned(),
             children,
             entries,
         }
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize,Debug)]
 pub struct Entry {
     pub username: String,
     pub pass_vec: Vec<u8>,
@@ -76,11 +80,13 @@ pub struct Entry {
 }
 
 impl Entry {
+    #[allow(dead_code)]
     /// returns a JSON representation of the entry as a string.
     pub fn to_json_string(&mut self) -> String {
         serde_json::to_string(self).unwrap()
     }
 
+    #[allow(dead_code)]
     /// populate an entry from a &[u8] array,of a JSON serialisation of an entry. returns a Result<(),serde_json::Error>
     pub fn from_json_arr(&mut self, arr: &[u8]) -> Result<(), serde_json::Error> {
         let from_json: Entry = serde_json::from_slice(arr)?;
@@ -199,10 +205,10 @@ pub fn get_all_entries(container: &Container) -> Vec<Entry> {
 
 // Function to load and decrypt a container from an encrypted file
 pub fn load_and_decrypt_container(
-    container: &mut Container,
+    mut container: Container,
     password: &str,
     file_path: &str,
-) -> Result<(), anyhow::Error> {
+) -> Result<Container, anyhow::Error> {
     let enc_data = match std::fs::read(file_path) {
         Ok(data) => data,
         Err(error) => {
@@ -225,7 +231,7 @@ pub fn load_and_decrypt_container(
     println!("dec_res:{dec_string:?}");
 
     match container.from_json_arr(dec_res.as_slice()) {
-        Ok(_) => Ok(()),
+        Ok(_) => Ok(container),
         Err(error) => {
             println!("Failed to deserialize container: {error:?}");
             let e: anyhow::Error = error.into();
@@ -236,7 +242,7 @@ pub fn load_and_decrypt_container(
 
 // Function to encrypt and save a container to a file
 pub fn encrypt_and_save_container(
-    container: &mut Container,
+    mut container: Container,
     password: &str,
     file_path: &str,
 ) -> Result<(), anyhow::Error> {
