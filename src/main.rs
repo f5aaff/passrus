@@ -1,6 +1,7 @@
 use anyhow::Result;
-use passman::{Container, Entry};
+use passman::{encrypt_and_save_container, Container, Entry};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -14,11 +15,12 @@ mod passman;
 enum Command {
     NewContainer {
         name: String,
-        master_password: String
+        file_name: String,
+        master_password: String,
     },
     CreateDbFile {
         file_name: String,
-        master_password: String
+        master_password: String,
     },
     AddEntry {
         container_name: String,
@@ -26,11 +28,8 @@ enum Command {
         email: String,
         url: String,
         password: String,
-        master_password: String
-    },
-    Encrypt {
-        container_name: String,
-        master_password: String
+        master_password: String,
+        file_path: String,
     },
     Decrypt {
         file_path: String,
@@ -38,7 +37,7 @@ enum Command {
     },
     GetEntries {
         container_name: String,
-        master_password: String
+        master_password: String,
     },
 }
 
@@ -62,9 +61,19 @@ async fn main() -> Result<()> {
     let listener = UnixListener::bind(socket_path)?;
 
     // Create a thread-safe in-memory database of containers (Arc + Mutex for shared state)
-    let container_db = Arc::new(Mutex::new(vec![]));
+    let container_db = Arc::new(Mutex::new(passman::Container {
+        name: "".to_string(),
+        children: HashMap::new(),
+        entries: HashMap::new(),
+        parent: "".to_string(),
+    }));
     // Create a thread-safe in-memory database for decrypted containers
-    let decrypted_container_db = Arc::new(Mutex::new(vec![]));
+    let decrypted_container_db = Arc::new(Mutex::new(passman::Container {
+        name: "".to_string(),
+        children: HashMap::new(),
+        entries: HashMap::new(),
+        parent: "".to_string(),
+    }));
 
     println!("Passman service running...");
 
@@ -88,8 +97,8 @@ async fn main() -> Result<()> {
 /// Handles the client connection and processes commands
 async fn handle_client(
     mut socket: UnixStream,
-    container_db: Arc<Mutex<Vec<Container>>>,
-    decrypted_container_db: Arc<Mutex<Vec<Container>>>,
+    container_db: Arc<Mutex<Container>>,
+    decrypted_container_db: Arc<Mutex<Container>>,
 ) -> Result<()> {
     let (reader, mut writer) = socket.split();
     let mut buf_reader = BufReader::new(reader);
@@ -103,20 +112,44 @@ async fn handle_client(
 
     // Process the command and send a response
     let response = match command {
-        Command::NewContainer { name, master_password } => create_new_container(name, &container_db).await,
-        Command::CreateDbFile { file_name, master_password } => create_db_file(file_name,master_password, &container_db).await,
+        Command::NewContainer {
+            name,
+            file_name,
+            master_password,
+        } => create_new_container(name, &container_db, file_name, master_password).await,
+        Command::CreateDbFile {
+            file_name,
+            master_password,
+        } => create_db_file(file_name, master_password, &container_db).await,
         Command::AddEntry {
             container_name,
             username,
             email,
             url,
             password,
-            master_password
-
-        } => add_entry_to_container(container_name, username, email, url, password,master_password, &container_db).await,
-        Command::Encrypt { container_name, master_password } => encrypt_container(container_name, master_password, &container_db).await,
-        Command::Decrypt { file_path, master_password } => decrypt_container(file_path, master_password, &decrypted_container_db).await,
-        Command::GetEntries { container_name, master_password } => get_entries(container_name, &container_db).await,
+            master_password,
+            file_path,
+        } => {
+            add_entry_to_container(
+                container_name,
+                username,
+                email,
+                url,
+                password,
+                master_password,
+                &container_db,
+                file_path,
+            )
+            .await
+        }
+        Command::Decrypt {
+            file_path,
+            master_password,
+        } => decrypt_container(file_path, master_password, &decrypted_container_db).await,
+        Command::GetEntries {
+            container_name,
+            master_password,
+        } => get_entries(container_name, master_password, &container_db).await,
     };
 
     // Send the response back to the client
@@ -128,25 +161,58 @@ async fn handle_client(
 }
 
 /// Create a new container and add it to the in-memory database
-async fn create_new_container(name: String, container_db: &Arc<Mutex<Vec<Container>>>) -> Response {
-    let new_container = Container::new(&name, None);
+async fn create_new_container(
+    name: String,
+    container_db: &Arc<Mutex<Container>>,
+    file_name: String,
+    master_password: String,
+) -> Response {
+    // lock the thread, clone the child containers out
     let mut db = container_db.lock().unwrap();
-    db.push(new_container);
+    let mut new_children = db.children.clone();
 
-    Response {
+    // match on some/none for getting the name from the child containers
+    match new_children.get_mut(&name) {
+        Some(_) => {
+            return Response {
+                success: false,
+                message: format!("container already exists: {}", &name),
+            }
+        }
+        // if it doesn't exist yet, insert a new container into the child container hash map
+        None => {
+            new_children.insert(name.clone(), passman::Container::new(&name, Some(&db.name)));
+        }
+    };
+    // reassign the original container children to the new hash map
+    db.children = new_children;
+
+    // clone out the db, so it can be encrypted and written to file.
+    let to_file = db.clone();
+    if let Err(e) = encrypt_and_save_container(to_file, &master_password, &file_name) {
+        return Response {
+            success: false,
+            message: format!("failed to save container {} due to error: {:#?} ", name, e),
+        };
+    }
+    return Response {
         success: true,
         message: format!("New container created: {}", name),
-    }
+    };
 }
 
 /// Create a new database file and initialize an in-memory container
-async fn create_db_file(file_name: String, password:String, container_db: &Arc<Mutex<Vec<Container>>>) -> Response {
+async fn create_db_file(
+    file_name: String,
+    password: String,
+    container_db: &Arc<Mutex<Container>>,
+) -> Response {
     let new_container = Container::new(&file_name, None);
     let mut db = container_db.lock().unwrap();
-    db.push(new_container.clone());
+    db.add_child(new_container.clone());
 
     // Save the initial empty container to the new file (as encrypted)
-    if let Err(e) = passman::encrypt_and_save_container(new_container.clone(), &password, &file_name) {
+    if let Err(e) = encrypt_and_save_container(db.clone(), &password, &file_name) {
         return Response {
             success: false,
             message: format!("Failed to create database file: {}", e),
@@ -167,54 +233,57 @@ async fn add_entry_to_container(
     url: String,
     password: String,
     master_password: String,
-    container_db: &Arc<Mutex<Vec<Container>>>,
+    container_db: &Arc<Mutex<Container>>,
+    file_path: String,
 ) -> Response {
+    // lock mutex for db
     let mut db = container_db.lock().unwrap();
-    if let Some(container) = db.iter_mut().find(|c| c.name == container_name) {
-        let new_entry = Entry::new(&username, password.as_bytes().to_vec(), &email, &url);
-        container.add_entry(new_entry);
+
+    // empty entry
+    let new_entry = Entry::new(&username, password.as_bytes().to_vec(), &email, &url);
+
+    // clone children out of container, to have as hash map proper, not mutex guard.
+    let mut new_children = db.children.clone();
+    // check if container name present in container children
+    match new_children.get_mut(&container_name) {
+        Some(container) => container.add_entry(new_entry),
+        None => {
+            return Response {
+                success: false,
+                message: format!("container not found: {}", container_name),
+            }
+        }
+    };
+    // reassign db children to new_children
+    db.children = new_children;
+
+    // store to file
+    let to_file = db.clone();
+    if let Err(e) = encrypt_and_save_container(to_file, &master_password, &file_path) {
         return Response {
-            success: true,
-            message: "Entry added successfully.".to_string(),
+            success: false,
+            message: format!("failed to encrypt and save db: {:?}", e),
         };
     }
 
-    Response {
-        success: false,
-        message: format!("Container not found: {}", container_name),
-    }
-}
-
-/// Encrypt a container and save it
-async fn encrypt_container(container_name: String, password: String, container_db: &Arc<Mutex<Vec<Container>>>) -> Response {
-    let db = container_db.lock().unwrap();
-    if let Some(container) = db.iter().find(|c| c.name == container_name) {
-        match passman::encrypt_and_save_container(container.clone(), &password, &container_name) {
-            Ok(_) => Response {
-                success: true,
-                message: "Container encrypted successfully.".to_string(),
-            },
-            Err(e) => Response {
-                success: false,
-                message: format!("Failed to encrypt container: {}", e),
-            },
-        }
-    } else {
-        Response {
-            success: false,
-            message: format!("Container not found: {}", container_name),
-        }
-    }
+    return Response {
+        success: true,
+        message: "Entry added successfully.".to_string(),
+    };
 }
 
 /// Decrypt a container from a file and store it in memory
-async fn decrypt_container(file_path: String, password: String, decrypted_container_db: &Arc<Mutex<Vec<Container>>>) -> Response {
+async fn decrypt_container(
+    file_path: String,
+    password: String,
+    decrypted_container_db: &Arc<Mutex<Container>>,
+) -> Response {
     let container = Container::new("decrypted_container", None);
     match passman::load_and_decrypt_container(container, &password, &file_path) {
         Ok(decrypted_container) => {
             // Store decrypted container in memory
             let mut db = decrypted_container_db.lock().unwrap();
-            db.push(decrypted_container); // Save the decrypted container in the shared state
+            *db = decrypted_container.clone(); // Save the decrypted container in the shared state
 
             Response {
                 success: true,
@@ -227,20 +296,75 @@ async fn decrypt_container(file_path: String, password: String, decrypted_contai
         },
     }
 }
+#[allow(dead_code)]
+fn decrypt_entry_vec(entries: Vec<passman::Entry>, master_password: String) -> Response {
+    // template for a decrypted entry
+    #[derive(Debug)]
+    struct DecryptedEntry {
+        username: String,
+        email: String,
+        url: String,
+        password: String,
+    }
+    // empty vec of decrypted entries
+    let mut decrypted_entries: Vec<DecryptedEntry> = Vec::new();
+
+    // clone the entries for ease of access/mutability
+    let entry_clone = entries.clone();
+    for mut entry in entry_clone {
+        // create a decrypted entry from the current entry's vals
+        let mut decrypted_entry = DecryptedEntry {
+            username: entry.username.clone(),
+            email: entry.email.clone(),
+            url: entry.url.clone(),
+            password: String::from(""),
+        };
+        // if the pass decrypts, convert to string
+        match entry.decrypt_password(&master_password) {
+            Ok(_) => {
+                decrypted_entry.password = String::from_utf8(entry.pass_vec).unwrap();
+            }
+            // fill with generic error message
+            Err(_) => {
+                decrypted_entry.password = format!("???decryption error???");
+            }
+        }
+        decrypted_entries.push(decrypted_entry);
+    }
+    Response {
+        success: true,
+        message: format!("{:#?}", decrypted_entries),
+    }
+}
 
 /// Get all entries from a container
-async fn get_entries(container_name: String, container_db: &Arc<Mutex<Vec<Container>>>) -> Response {
+async fn get_entries(
+    container_name: String,
+    master_password: String,
+    container_db: &Arc<Mutex<Container>>,
+) -> Response {
     let db = container_db.lock().unwrap();
-    if let Some(container) = db.iter().find(|c| c.name == container_name) {
-        let entries = passman::get_all_entries(container);
-        Response {
-            success: true,
-            message: format!("Entries: {:#?}", entries),
+    let opt_name: Option<&str> = Some(&container_name);
+    // if the container_name is * or empty, get all entries in the whole db
+    match opt_name {
+        Some("*") | None => {
+            let entries = passman::get_all_entries(&db.clone());
+            return decrypt_entry_vec(entries, master_password);
         }
-    } else {
-        Response {
-            success: false,
-            message: format!("Container not found: {}", container_name),
+        Some(_) => {
+            let mut new_children = db.children.clone();
+            match new_children.get_mut(&container_name) {
+                Some(container) => {
+                    let entries = passman::get_all_entries(container);
+                    return decrypt_entry_vec(entries, master_password);
+                }
+                None => {
+                    return Response {
+                        success: false,
+                        message: format!("container {} not found", container_name),
+                    }
+                }
+            }
         }
     }
 }
