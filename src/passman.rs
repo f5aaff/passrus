@@ -44,6 +44,7 @@ impl Container {
         *self = from_json;
         Ok(())
     }
+
     #[allow(dead_code)]
     /// populate a container from a &str, of a  JSON serialisation of a container. returns a Result<(),serde_json::Error>
     pub fn from_json_string(&mut self, s: &str) -> Result<(), serde_json::Error> {
@@ -68,9 +69,28 @@ impl Container {
             entries,
         }
     }
+    /// Recursively encrypt passwords for all entries in the container and its children.
+    pub fn encrypt_all_passwords(
+        &mut self,
+        key: [u8; 32],
+        nonce: [u8; 24],
+        salt: [u8; 32],
+    ) -> Result<(), anyhow::Error> {
+        // Encrypt passwords for all entries in the current container
+        for entry in self.entries.values_mut() {
+            entry.encrypt_password(key, nonce, salt)?;
+        }
+
+        // Recursively call this function on all child containers
+        for child in self.children.values_mut() {
+            child.encrypt_all_passwords(key, nonce, salt)?;
+        }
+
+        Ok(())
+    }
 }
 
-#[derive(Clone, Serialize, Deserialize,Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Entry {
     pub username: String,
     pub pass_vec: Vec<u8>,
@@ -94,6 +114,7 @@ impl Entry {
         Ok(())
     }
 
+    #[allow(dead_code)]
     /// populate an entry from a &str, of a  JSON serialisation of an entry. returns a Result<(),serde_json::Error>
     pub fn from_json_string(&mut self, s: &str) -> Result<(), serde_json::Error> {
         #[derive(Clone, Serialize, Deserialize)]
@@ -122,6 +143,8 @@ impl Entry {
             parent: "".to_owned(),
         }
     }
+
+    #[allow(dead_code)]
     pub fn encrypt_password(
         &mut self,
         key: [u8; 32],
@@ -141,6 +164,7 @@ impl Entry {
     }
 }
 
+#[allow(dead_code)]
 pub fn get_entries_by_field(
     container: &Container,
     field_name: &str,
@@ -199,7 +223,6 @@ pub fn get_all_entries(container: &Container) -> Vec<Entry> {
     for child_container in container.children.values() {
         result.extend(get_all_entries(child_container)); // Recursively print entries in the child container
     }
-
     result
 }
 
@@ -217,8 +240,6 @@ pub fn load_and_decrypt_container(
             return Err(e);
         }
     };
-    let enc_string = String::from_utf8_lossy(enc_data.as_slice());
-    println!("file read{enc_string:?}");
     let dec_res = match cryptman::decrypt_file_mem_gen_key(enc_data, "", password) {
         Ok(res) => res,
         Err(error) => {
@@ -227,8 +248,6 @@ pub fn load_and_decrypt_container(
             return Err(e);
         }
     };
-    let dec_string = String::from_utf8_lossy(dec_res.as_slice());
-    println!("dec_res:{dec_string:?}");
 
     match container.from_json_arr(dec_res.as_slice()) {
         Ok(_) => Ok(container),
@@ -246,8 +265,7 @@ pub fn encrypt_and_save_container(
     password: &str,
     file_path: &str,
 ) -> Result<(), anyhow::Error> {
-    let json_data = container.to_json_string();
-    let json_arr = json_data.as_bytes();
+
 
     let key_n_salt = match cryptman::pass_2_key(password, [0u8; 32]) {
         Ok(res) => res,
@@ -263,6 +281,14 @@ pub fn encrypt_and_save_container(
 
     let mut nonce = [0u8; 24];
     OsRng.fill_bytes(&mut nonce);
+
+    if let Err(e) = container.encrypt_all_passwords(key, nonce, salt){
+        return Err(e)
+    };
+
+    let json_data = container.to_json_string();
+    let json_arr = json_data.as_bytes();
+
 
     let enc_res =
         match cryptman::encrypt_file_mem_with_salt(json_arr.to_vec(), "", &key, &nonce, &salt) {

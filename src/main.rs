@@ -1,6 +1,7 @@
 use anyhow::Result;
-use passman::{encrypt_and_save_container, Container, Entry};
+use passman::{encrypt_and_save_container, load_and_decrypt_container, Container, Entry};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -22,6 +23,10 @@ enum Command {
         file_name: String,
         master_password: String,
     },
+    OpenDbFile {
+        file_name: String,
+        master_password: String,
+    },
     AddEntry {
         container_name: String,
         username: String,
@@ -40,11 +45,17 @@ enum Command {
         master_password: String,
     },
 }
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum Message {
+    Text(String),
+    Anonymous(Value),
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Response {
     success: bool,
-    message: String,
+    message: Message,
 }
 
 #[tokio::main]
@@ -121,6 +132,10 @@ async fn handle_client(
             file_name,
             master_password,
         } => create_db_file(file_name, master_password, &container_db).await,
+        Command::OpenDbFile {
+            file_name,
+            master_password,
+        } => open_db_file(file_name, master_password, &container_db).await,
         Command::AddEntry {
             container_name,
             username,
@@ -176,7 +191,7 @@ async fn create_new_container(
         Some(_) => {
             return Response {
                 success: false,
-                message: format!("container already exists: {}", &name),
+                message: Message::Text(format!("container already exists: {}", &name)),
             }
         }
         // if it doesn't exist yet, insert a new container into the child container hash map
@@ -192,12 +207,15 @@ async fn create_new_container(
     if let Err(e) = encrypt_and_save_container(to_file, &master_password, &file_name) {
         return Response {
             success: false,
-            message: format!("failed to save container {} due to error: {:#?} ", name, e),
+            message: Message::Text(format!(
+                "failed to save container {} due to error: {:#?} ",
+                name, e
+            )),
         };
     }
     return Response {
         success: true,
-        message: format!("New container created: {}", name),
+        message: Message::Text(format!("New container created: {}", name)),
     };
 }
 
@@ -215,13 +233,35 @@ async fn create_db_file(
     if let Err(e) = encrypt_and_save_container(db.clone(), &password, &file_name) {
         return Response {
             success: false,
-            message: format!("Failed to create database file: {}", e),
+            message: Message::Text(format!("Failed to create database file: {}", e)),
         };
     }
 
     Response {
         success: true,
-        message: format!("New database file created: {}", file_name),
+        message: Message::Text(format!("New database file created: {}", file_name)),
+    }
+}
+
+async fn open_db_file(
+    file_name: String,
+    master_password: String,
+    container_db: &Arc<Mutex<Container>>,
+) -> Response {
+    let new_container = Container::new(&file_name, None);
+    let mut db = container_db.lock().unwrap();
+    match load_and_decrypt_container(new_container, &master_password, &file_name) {
+        Ok(container) => {
+            *db = container;
+            Response {
+                success: true,
+                message: Message::Text(format!(":db {} loaded successfully.", &file_name)),
+            }
+        }
+        Err(e) => Response {
+            success: false,
+            message: Message::Text(format!("failed to load and decrypt database: {}", e)),
+        },
     }
 }
 
@@ -250,7 +290,7 @@ async fn add_entry_to_container(
         None => {
             return Response {
                 success: false,
-                message: format!("container not found: {}", container_name),
+                message: Message::Text(format!("container not found: {}", container_name)),
             }
         }
     };
@@ -262,13 +302,13 @@ async fn add_entry_to_container(
     if let Err(e) = encrypt_and_save_container(to_file, &master_password, &file_path) {
         return Response {
             success: false,
-            message: format!("failed to encrypt and save db: {:?}", e),
+            message: Message::Text(format!("failed to encrypt and save db: {:?}", e)),
         };
     }
 
     return Response {
         success: true,
-        message: "Entry added successfully.".to_string(),
+        message: Message::Text("Entry added successfully.".to_string()),
     };
 }
 
@@ -287,19 +327,19 @@ async fn decrypt_container(
 
             Response {
                 success: true,
-                message: "Container decrypted and stored in memory.".to_string(),
+                message: Message::Text("Container decrypted and stored in memory.".to_string()),
             }
         }
         Err(e) => Response {
             success: false,
-            message: format!("Failed to decrypt container: {}", e),
+            message: Message::Text(format!("Failed to decrypt container: {}", e)),
         },
     }
 }
-#[allow(dead_code)]
+
 fn decrypt_entry_vec(entries: Vec<passman::Entry>, master_password: String) -> Response {
     // template for a decrypted entry
-    #[derive(Debug)]
+    #[derive(Debug, Serialize, Deserialize)]
     struct DecryptedEntry {
         username: String,
         email: String,
@@ -319,21 +359,31 @@ fn decrypt_entry_vec(entries: Vec<passman::Entry>, master_password: String) -> R
             url: entry.url.clone(),
             password: String::from(""),
         };
+
+        println!("passvec:{}", String::from_utf8_lossy(&entry.pass_vec));
         // if the pass decrypts, convert to string
         match entry.decrypt_password(&master_password) {
             Ok(_) => {
-                decrypted_entry.password = String::from_utf8(entry.pass_vec).unwrap();
+                println!("passvec:{}", String::from_utf8_lossy(&entry.pass_vec));
+                //decrypted_entry.password = format!("{}",String::from_utf8_lossy(&entry.pass_vec));
             }
             // fill with generic error message
             Err(_) => {
-                decrypted_entry.password = format!("???decryption error???");
+                decrypted_entry.password = format!("{}",String::from_utf8_lossy(&entry.pass_vec));
             }
         }
         decrypted_entries.push(decrypted_entry);
     }
-    Response {
-        success: true,
-        message: format!("{:#?}", decrypted_entries),
+
+    match serde_json::to_value(&decrypted_entries) {
+        Ok(msg) => Response {
+            success: true,
+            message: Message::Anonymous(msg),
+        },
+        Err(e) => Response {
+            success: false,
+            message: Message::Text(format!("error formatting entries: {}", e)),
+        },
     }
 }
 
@@ -361,7 +411,7 @@ async fn get_entries(
                 None => {
                     return Response {
                         success: false,
-                        message: format!("container {} not found", container_name),
+                        message: Message::Text(format!("container {} not found", container_name)),
                     }
                 }
             }
