@@ -366,8 +366,8 @@ fn decrypt_entry_vec(entries: Vec<passman::Entry>, master_password: String) -> R
                 decrypted_entry.password = format!("{}",String::from_utf8_lossy(&entry.pass_vec));
             }
             // fill with generic error message
-            Err(e) => {
-                decrypted_entry.password = format!("error decrypting pass: {}",e);
+            Err(_) => {
+                decrypted_entry.password = format!("{}",String::from_utf8_lossy(&entry.pass_vec));
             }
         }
         decrypted_entries.push(decrypted_entry);
