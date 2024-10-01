@@ -1,1 +1,1 @@
-{"GetEntries": {"container_name": "*", "master_password": "default_password"}}
+{"GetEntries": {"container_name": "*", "master_password": "default_password", "file_path":"/home/james/passrus_db"}}

@@ -36,6 +36,10 @@ enum Command {
         master_password: String,
         file_path: String,
     },
+    CloseDB {
+        file_path: String,
+        master_password: String,
+    },
     Decrypt {
         file_path: String,
         master_password: String,
@@ -43,6 +47,7 @@ enum Command {
     GetEntries {
         container_name: String,
         master_password: String,
+        file_path: String,
     },
 }
 #[derive(Debug, Serialize, Deserialize)]
@@ -157,6 +162,10 @@ async fn handle_client(
             )
             .await
         }
+        Command::CloseDB {
+            file_path,
+            master_password,
+        } => close_db_file(file_path, master_password, &container_db).await,
         Command::Decrypt {
             file_path,
             master_password,
@@ -164,7 +173,8 @@ async fn handle_client(
         Command::GetEntries {
             container_name,
             master_password,
-        } => get_entries(container_name, master_password, &container_db).await,
+            file_path,
+        } => get_entries(container_name, master_password, &container_db, file_path).await,
     };
 
     // Send the response back to the client
@@ -264,7 +274,26 @@ async fn open_db_file(
         },
     }
 }
-
+async fn close_db_file(
+    file_path: String,
+    master_password: String,
+    container_db: &Arc<Mutex<Container>>,
+) -> Response {
+    let db = container_db.lock().unwrap();
+    match encrypt_and_save_container(db.clone(), &master_password, &file_path) {
+        Ok(_) => Response {
+            success: true,
+            message: Message::Text(format!(
+                "db {} encrypted and saved successfully.",
+                &file_path
+            )),
+        },
+        Err(e) => Response {
+            success: false,
+            message: Message::Text(format!("failed to encrypt and save db: {}", e)),
+        },
+    }
+}
 /// Add a new entry to a container
 async fn add_entry_to_container(
     container_name: String,
@@ -363,17 +392,17 @@ fn decrypt_entry_vec(entries: Vec<passman::Entry>, master_password: String) -> R
         // if the pass decrypts, convert to string
         match entry.decrypt_password(&master_password) {
             Ok(_) => {
-                decrypted_entry.password = format!("{}",String::from_utf8_lossy(&entry.pass_vec));
+                decrypted_entry.password = format!("{}", String::from_utf8_lossy(&entry.pass_vec));
             }
             // fill with generic error message
             Err(_) => {
-                decrypted_entry.password = format!("{}",String::from_utf8_lossy(&entry.pass_vec));
+                decrypted_entry.password = format!("{}", String::from_utf8_lossy(&entry.pass_vec));
             }
         }
         decrypted_entries.push(decrypted_entry);
     }
 
-    println!("{}",serde_json::to_value(&decrypted_entries).unwrap());
+    println!("{}", serde_json::to_value(&decrypted_entries).unwrap());
     match serde_json::to_value(&decrypted_entries) {
         Ok(msg) => Response {
             success: true,
@@ -391,29 +420,41 @@ async fn get_entries(
     container_name: String,
     master_password: String,
     container_db: &Arc<Mutex<Container>>,
+    file_name: String,
 ) -> Response {
     let db = container_db.lock().unwrap();
     let opt_name: Option<&str> = Some(&container_name);
     // if the container_name is * or empty, get all entries in the whole db
-    match opt_name {
+
+    let to_file = db.clone();
+    if let Err(e) = encrypt_and_save_container(to_file, &master_password, &file_name) {
+        return Response {
+            success: false,
+            message: Message::Text(format!(
+                "failed to save container {} due to error: {:#?} ",
+                db.name, e
+            )),
+        };
+    }
+    let response = match opt_name {
         Some("*") | None => {
             let entries = passman::get_all_entries(&db.clone());
-            return decrypt_entry_vec(entries, master_password);
+            decrypt_entry_vec(entries, master_password.clone())
         }
         Some(_) => {
             let mut new_children = db.children.clone();
             match new_children.get_mut(&container_name) {
                 Some(container) => {
                     let entries = passman::get_all_entries(container);
-                    return decrypt_entry_vec(entries, master_password);
+                    decrypt_entry_vec(entries, master_password.clone())
                 }
-                None => {
-                    return Response {
-                        success: false,
-                        message: Message::Text(format!("container {} not found", container_name)),
-                    }
-                }
+                None => Response {
+                    success: false,
+                    message: Message::Text(format!("container {} not found", container_name)),
+                },
             }
         }
-    }
+    };
+
+    response
 }
