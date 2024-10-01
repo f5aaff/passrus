@@ -360,11 +360,9 @@ fn decrypt_entry_vec(entries: Vec<passman::Entry>, master_password: String) -> R
             password: String::from(""),
         };
 
-        println!("passvec before:{}", String::from_utf8_lossy(&entry.pass_vec));
         // if the pass decrypts, convert to string
         match entry.decrypt_password(&master_password) {
             Ok(_) => {
-                println!("passvec after:{}", String::from_utf8_lossy(&entry.pass_vec));
                 decrypted_entry.password = format!("{}",String::from_utf8_lossy(&entry.pass_vec));
             }
             // fill with generic error message
@@ -375,6 +373,7 @@ fn decrypt_entry_vec(entries: Vec<passman::Entry>, master_password: String) -> R
         decrypted_entries.push(decrypted_entry);
     }
 
+    println!("{}",serde_json::to_value(&decrypted_entries).unwrap());
     match serde_json::to_value(&decrypted_entries) {
         Ok(msg) => Response {
             success: true,
